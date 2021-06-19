@@ -1951,6 +1951,13 @@ enum ikev2_hash_algorithm {
 
 #define LEN_ECDSA_SHA2_BLOB ASN1_SHA2_ECDSA_SIZE
 
+#define ASN1_ED25519_EDDSA_SIZE 7
+
+#define EDDSA_ED25519_BLOB \
+	0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70
+
+#define LEN_EDDSA_ED25519_BLOB ASN1_ED25519_EDDSA_SIZE
+
 /* Limits on size of RSA moduli.
  * The upper bound matches that of DNSSEC (see RFC 2537).
  * The lower bound must be more than 11 octets for certain

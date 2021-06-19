@@ -66,12 +66,28 @@ struct ECDSA_private_key {
 	chunk_t version;
 };
 
+struct EC_public_key {
+	chunk_t ecParams;
+	chunk_t pub; /* publicValue */
+};
+
+struct EC_private_key {
+	struct EC_public_key pub;
+	chunk_t ecParams;
+	chunk_t pub_val; /* publicValue */
+	chunk_t privateValue;
+	chunk_t version;
+};
+
 err_t rsa_pubkey_to_base64(chunk_t exponent, chunk_t modulus, char **rr);
 
 err_t unpack_RSA_public_key(struct RSA_public_key *rsa,
 			    keyid_t *keyid, ckaid_t *ckaid, size_t *size,
 			    const chunk_t *pubkey);
 err_t unpack_ECDSA_public_key(struct ECDSA_public_key *ecdsa,
+			      keyid_t *keyid, ckaid_t *ckaid, size_t *size,
+			      const chunk_t *pubkey);
+err_t unpack_EDDSA_public_key(struct EC_public_key *eddsa,
 			      keyid_t *keyid, ckaid_t *ckaid, size_t *size,
 			      const chunk_t *pubkey);
 
@@ -87,6 +103,7 @@ struct private_key_stuff {
 		chunk_t preshared_secret;
 		struct RSA_private_key RSA_private_key;
 		struct ECDSA_private_key ECDSA_private_key;
+		struct EC_private_key EC_private_key;
 		/* struct smartcard *smartcard; */
 	} u;
 
@@ -141,6 +158,7 @@ struct hash_signature {
 union pubkey_content {
 	struct RSA_public_key rsa;
 	struct ECDSA_public_key ecdsa;
+	struct EC_public_key ecKeys;
 };
 
 struct pubkey_type {
@@ -167,6 +185,7 @@ struct pubkey_type {
 
 extern const struct pubkey_type pubkey_type_rsa;
 extern const struct pubkey_type pubkey_type_ecdsa;
+extern const struct pubkey_type pubkey_type_ecKeys;
 
 const struct pubkey_type *pubkey_alg_type(enum pubkey_alg alg);
 

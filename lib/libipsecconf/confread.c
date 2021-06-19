@@ -179,7 +179,7 @@ static void ipsecconf_default_values(struct starter_config *cfg)
 	d->ike_version = IKEv2;
 	d->policy =
 		POLICY_TUNNEL |
-		POLICY_ECDSA | POLICY_RSASIG | POLICY_RSASIG_v1_5 | /* authby= */
+		POLICY_ECDSA | POLICY_RSASIG | POLICY_RSASIG_v1_5 | POLICY_EDDSA |/* authby= */
 		POLICY_ENCRYPT | POLICY_PFS |
 		POLICY_IKE_FRAG_ALLOW |      /* ike_frag=yes */
 		POLICY_ESN_NO;      	     /* esn=no */
@@ -1494,6 +1494,9 @@ static bool load_conn(struct starter_conn *conn,
 			} else if (streq(val, "ecdsa-sha1")) {
 				starter_error_append(perrl, "authby=ecdsa cannot use sha1, only sha2");
 				return TRUE;
+			} else if (streq(val, "eddsa") || streq(val, "eddsa-identity")) {
+             	conn->policy |= POLICY_EDDSA;
+             	conn->sighash_policy |= POL_SIGHASH_IDENTITY;
 			} else {
 				starter_error_append(perrl, "connection authby= value is unknown");
 				return TRUE;
