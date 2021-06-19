@@ -493,7 +493,7 @@ diag_t v2_authsig_and_log(enum ikev2_auth_method recv_auth,
 							(size_t) (ASN1_LEN_ALGO_IDENTIFIER +
 								  PMAX(ASN1_IDENTITY_EDDSA_SIZE, PMAX(ASN1_SHA1_ECDSA_SIZE,
 								       PMAX(ASN1_SHA2_RSA_PSS_SIZE,
-									    ASN1_SHA2_ECDSA_SIZE))));
+									    ASN1_SHA2_ECDSA_SIZE)))));
 					DBG_dump("offered blob", signature_pbs->cur, dl);
 				}
 				return diag("authentication failed: no acceptable ECDSA/RSA-PSS ASN.1 signature hash proposal included for %s",
