@@ -1026,7 +1026,7 @@ enum sighash_policy_bits {
 	POL_SIGHASH_SHA2_256_IX,
 	POL_SIGHASH_SHA2_384_IX,
 	POL_SIGHASH_SHA2_512_IX,
-	POL_SIGHASH_IDENTITY,
+	POL_SIGHASH_IDENTITY_IX,
 };
 
 extern const struct enum_names sighash_policy_bit_names;
