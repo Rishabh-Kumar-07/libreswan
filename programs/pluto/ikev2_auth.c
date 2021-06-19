@@ -370,8 +370,8 @@ static bool ikev2_try_asn1_hash_blob(const struct hash_desc *hash_algo,
 	shunk_t b = authby_asn1_hash_blob(hash_algo, authby);
 
 	uint8_t in_blob[ASN1_LEN_ALGO_IDENTIFIER +
-		PMAX(ASN1_ED25519_EDDSA_SIZE, PMAX(ASN1_SHA1_ECDSA_SIZE,
-			PMAX(ASN1_SHA2_RSA_PSS_SIZE, ASN1_SHA2_ECDSA_SIZE))];
+		PMAX(ASN1_IDENTITY_EDDSA_SIZE, PMAX(ASN1_SHA1_ECDSA_SIZE,
+			PMAX(ASN1_SHA2_RSA_PSS_SIZE, ASN1_SHA2_ECDSA_SIZE)))];
 	dbg("looking for ASN.1 blob for method %s for hash_algo %s",
 	    enum_name(&keyword_authby_names, authby), hash_algo->common.fqn);
 	return
@@ -491,7 +491,7 @@ diag_t v2_authsig_and_log(enum ikev2_auth_method recv_auth,
 				if (DBGP(DBG_BASE)) {
 					size_t dl = min(pbs_left(signature_pbs),
 							(size_t) (ASN1_LEN_ALGO_IDENTIFIER +
-								  PMAX(ASN1_ED25519_EDDSA_SIZE, PMAX(ASN1_SHA1_ECDSA_SIZE,
+								  PMAX(ASN1_IDENTITY_EDDSA_SIZE, PMAX(ASN1_SHA1_ECDSA_SIZE,
 								       PMAX(ASN1_SHA2_RSA_PSS_SIZE,
 									    ASN1_SHA2_ECDSA_SIZE))));
 					DBG_dump("offered blob", signature_pbs->cur, dl);
