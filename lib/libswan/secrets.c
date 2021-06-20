@@ -585,8 +585,8 @@ const struct pubkey_type pubkey_type_eddsa = {
 	.free_pubkey_content = EC_free_pubkey_content,
 	.extract_private_key_pubkey_content = EC_extract_private_key_pubkey_content,
 	.free_secret_content = EC_free_secret_content,
-	.secret_sane = EDDSA_secret_sane,
-	.sign_hash = EDDSA_sign_hash,
+	.secret_sane = ECDSA_secret_sane,
+	.sign_hash = ECDSA_sign_hash,
 	.extract_pubkey_content = EC_extract_pubkey_content,
 };
 
