@@ -441,7 +441,7 @@ static void EC_free_public_content(struct EC_public_key *eckey)
 
 static void EC_free_pubkey_content(union pubkey_content *u)
 {
-	EC_free_public_content(&u->ecdsa);
+	EC_free_public_content(&u->ecKeys);
 }
 
 static void EC_extract_public_key(struct EC_public_key *pub,
@@ -471,7 +471,7 @@ static void EC_extract_pubkey_content(union pubkey_content *pkc,
 					 SECKEYPublicKey *pubkey_nss,
 					 SECItem *ckaid_nss)
 {
-	EC_extract_public_key(&pkc->ecdsa, keyid, ckaid, size, pubkey_nss, ckaid_nss);
+	EC_extract_public_key(&pkc->ecKeys, keyid, ckaid, size, pubkey_nss, ckaid_nss);
 }
 
 static void EC_extract_private_key_pubkey_content(struct private_key_stuff *pks,
@@ -1593,7 +1593,7 @@ void lsw_free_preshared_secrets(struct secret **psecrets, struct logger *logger)
 				pfree(s->pks.u.preshared_secret.ptr);
 				break;
 			case PKK_RSA:
-			case PKK_EC
+			case PKK_EC:
 			case PKK_ECDSA:
 				/* Note: pub is all there is */
 				s->pks.pubkey_type->free_secret_content(&s->pks);
