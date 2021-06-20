@@ -249,7 +249,7 @@ err_t unpack_ECDSA_public_key(struct ECDSA_public_key *ecdsa,
        return NULL;
 }
 
-err_t unpack_EC_public_key(struct ECDSA_public_key *ecdsa,
+err_t unpack_EC_public_key(struct EC_public_key *eckey,
 			      keyid_t *keyid, ckaid_t *ckaid, size_t *size,
 			      const chunk_t *pubkey)
 {
@@ -267,13 +267,13 @@ err_t unpack_EC_public_key(struct ECDSA_public_key *ecdsa,
 	}
 
 	*size = pubkey->len;
-	ecdsa->pub = clone_hunk(*pubkey, "public value");
+	eckey->pub = clone_hunk(*pubkey, "public value");
 
 	if (DBGP(DBG_BASE)) {
 		/* pubkey information isn't DBG_PRIVATE */
 		DBG_log("keyid: *%s", str_keyid(*keyid));
 		DBG_log("  size: %zu", *size);
-		DBG_dump_hunk("  pub", ecdsa->pub);
+		DBG_dump_hunk("  pub", eckey->pub);
 		DBG_dump_hunk("  CKAID", *ckaid);
 	}
 
