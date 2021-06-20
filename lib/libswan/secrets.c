@@ -504,11 +504,26 @@ const struct pubkey_type pubkey_type_ecdsa = {
 	.extract_pubkey_content = ECDSA_extract_pubkey_content,
 };
 
+const struct pubkey_type pubkey_type_eddsa = {
+	.alg = PUBKEY_ALG_EDDSA,
+	.name = "EDDSA",
+	.private_key_kind = PKK_EC,
+	.unpack_pubkey_content = EDDSA_unpack_pubkey_content,
+	.free_pubkey_content = EDDSA_free_pubkey_content,
+	.extract_private_key_pubkey_content = EDDSA_extract_private_key_pubkey_content,
+	.free_secret_content = EDDSA_free_secret_content,
+	.secret_sane = EDDSA_secret_sane,
+	.sign_hash = EDDSA_sign_hash,
+	.extract_pubkey_content = EDDSA_extract_pubkey_content,
+};
+
+
 const struct pubkey_type *pubkey_alg_type(enum pubkey_alg alg)
 {
 	static const struct pubkey_type *pubkey_types[] = {
 		[PUBKEY_ALG_RSA] = &pubkey_type_rsa,
 		[PUBKEY_ALG_ECDSA] = &pubkey_type_ecdsa,
+		[PUBKEY_ALG_EDDSA] = &pubkey_type_eddsa,
 	};
 	passert(alg < elemsof(pubkey_types));
 	const struct pubkey_type *type = pubkey_types[alg];
@@ -754,6 +769,7 @@ struct secret *lsw_find_secret_by_id(struct secret *secrets,
 							&s->pks.u.RSA_private_key.pub,
 							&best->pks.u.RSA_private_key.pub);
 						break;
+					case PKK_EC:
 					case PKK_ECDSA:
 						/* there are no ECDSA kind of secrets */
 						/* ??? this seems not to be the case */
@@ -1504,6 +1520,7 @@ void lsw_free_preshared_secrets(struct secret **psecrets, struct logger *logger)
 				pfree(s->pks.u.preshared_secret.ptr);
 				break;
 			case PKK_RSA:
+			case PKK_EC
 			case PKK_ECDSA:
 				/* Note: pub is all there is */
 				s->pks.pubkey_type->free_secret_content(&s->pks);

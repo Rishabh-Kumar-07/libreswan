@@ -1088,6 +1088,7 @@ enum PrivateKeyKind {
 	PKK_XAUTH,
 	PKK_PPK,
 	PKK_ECDSA, /* should not be needed */
+	PKK_EC,
 	PKK_NULL,
 	PKK_INVALID,
 };
