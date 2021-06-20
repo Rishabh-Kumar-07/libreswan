@@ -147,6 +147,7 @@ static void print(struct private_key_stuff *pks,
 	}
 
 	// this never has a secret entry so shouldn't ne needed
+	case PKK_EC:
 	case PKK_ECDSA: {
 		break;
 	}
