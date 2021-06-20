@@ -419,6 +419,79 @@ static void ECDSA_free_secret_content(struct private_key_stuff *pks)
 	ECDSA_free_public_content(&ecdsak->pub);
 }
 
+static err_t EC_unpack_pubkey_content(union pubkey_content *u,
+					 keyid_t *keyid, ckaid_t *ckaid, size_t *size,
+					 chunk_t pubkey)
+{
+	return unpack_EC_public_key(&u->ecKeys, keyid, ckaid, size, &pubkey);
+}
+
+static void EC_free_public_content(struct EC_public_key *eckey)
+{
+	free_chunk_content(&eckey->pub);
+	free_chunk_content(&eckey->ecParams);
+	/* ckaid is an embedded struct (no pointer) */
+	/*
+	 * ??? what about ecdsa->pub.{version,ckaid}?
+	 *
+	 * CKAID's been changed to an embedded struct (so no pointer).
+	 * VERSION was dropped?
+	 */
+}
+
+static void EC_free_pubkey_content(union pubkey_content *u)
+{
+	EC_free_public_content(&u->ecdsa);
+}
+
+static void EC_extract_public_key(struct EC_public_key *pub,
+				     keyid_t *keyid, ckaid_t *ckaid, size_t *size,
+				     SECKEYPublicKey *pubkey_nss,
+				     SECItem *ckaid_nss)
+{
+	pub->pub = clone_secitem_as_chunk(pubkey_nss->u.ec.publicValue, "EC_Key pub");
+	pub->ecParams = clone_secitem_as_chunk(pubkey_nss->u.ec.DEREncodedParams, "EC_Key ecParams");
+	*size = pubkey_nss->u.ec.publicValue.len;
+	*ckaid = ckaid_from_secitem(ckaid_nss);
+	/* keyid */
+	err_t e = keyblob_to_keyid(pubkey_nss->u.ec.publicValue.data,
+				   pubkey_nss->u.ec.publicValue.len, keyid);
+	passert(e == NULL);
+
+	if (DBGP(DBG_CRYPT)) {
+		DBG_log("keyid *%s", str_keyid(*keyid));
+		DBG_log("  size: %zu", *size);
+		DBG_dump_hunk("pub", pub->pub);
+		DBG_dump_hunk("ecParams", pub->ecParams);
+	}
+}
+
+static void EC_extract_pubkey_content(union pubkey_content *pkc,
+					 keyid_t *keyid, ckaid_t *ckaid, size_t *size,
+					 SECKEYPublicKey *pubkey_nss,
+					 SECItem *ckaid_nss)
+{
+	EC_extract_public_key(&pkc->ecdsa, keyid, ckaid, size, pubkey_nss, ckaid_nss);
+}
+
+static void EC_extract_private_key_pubkey_content(struct private_key_stuff *pks,
+						     keyid_t *keyid, ckaid_t *ckaid, size_t *size,
+						     SECKEYPublicKey *pubkey_nss,
+						     SECItem *ckaid_nss)
+{
+	struct EC_private_key *eckey = &pks->u.EC_private_key;
+	EC_extract_public_key(&eckey->pub, keyid, ckaid, size,
+				 pubkey_nss, ckaid_nss);
+}
+
+static void EC_free_secret_content(struct private_key_stuff *pks)
+{
+	SECKEY_DestroyPrivateKey(pks->private_key);
+	struct EC_private_key *eckey = &pks->u.EC_private_key;
+	EC_free_public_content(&eckey->pub);
+}
+
+
 /*
  * The only unsafe (according to FIPS) curve is p192, and NSS does not
  * implement this, so there is no ECDSA curve that libreswan needs to
@@ -508,13 +581,13 @@ const struct pubkey_type pubkey_type_eddsa = {
 	.alg = PUBKEY_ALG_EDDSA,
 	.name = "EDDSA",
 	.private_key_kind = PKK_EC,
-	.unpack_pubkey_content = EDDSA_unpack_pubkey_content,
-	.free_pubkey_content = EDDSA_free_pubkey_content,
-	.extract_private_key_pubkey_content = EDDSA_extract_private_key_pubkey_content,
-	.free_secret_content = EDDSA_free_secret_content,
+	.unpack_pubkey_content = EC_unpack_pubkey_content,
+	.free_pubkey_content = EC_free_pubkey_content,
+	.extract_private_key_pubkey_content = EC_extract_private_key_pubkey_content,
+	.free_secret_content = EC_free_secret_content,
 	.secret_sane = EDDSA_secret_sane,
 	.sign_hash = EDDSA_sign_hash,
-	.extract_pubkey_content = EDDSA_extract_pubkey_content,
+	.extract_pubkey_content = EC_extract_pubkey_content,
 };
 
 
