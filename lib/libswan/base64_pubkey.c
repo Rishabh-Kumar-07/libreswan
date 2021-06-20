@@ -248,3 +248,34 @@ err_t unpack_ECDSA_public_key(struct ECDSA_public_key *ecdsa,
 
        return NULL;
 }
+
+err_t unpack_EC_public_key(struct ECDSA_public_key *ecdsa,
+			      keyid_t *keyid, ckaid_t *ckaid, size_t *size,
+			      const chunk_t *pubkey)
+{
+	err_t e;
+
+	e = form_ckaid_ec(*pubkey, ckaid);
+	if (e != NULL) {
+		return e;
+	}
+
+	/* use the ckaid since that digested the entire pubkey */
+	e = keyblob_to_keyid(ckaid->ptr, ckaid->len, keyid);
+	if (e != NULL) {
+		return e;
+	}
+
+	*size = pubkey->len;
+	ecdsa->pub = clone_hunk(*pubkey, "public value");
+
+	if (DBGP(DBG_BASE)) {
+		/* pubkey information isn't DBG_PRIVATE */
+		DBG_log("keyid: *%s", str_keyid(*keyid));
+		DBG_log("  size: %zu", *size);
+		DBG_dump_hunk("  pub", ecdsa->pub);
+		DBG_dump_hunk("  CKAID", *ckaid);
+	}
+
+       return NULL;
+}

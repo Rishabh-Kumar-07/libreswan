@@ -87,7 +87,7 @@ err_t unpack_RSA_public_key(struct RSA_public_key *rsa,
 err_t unpack_ECDSA_public_key(struct ECDSA_public_key *ecdsa,
 			      keyid_t *keyid, ckaid_t *ckaid, size_t *size,
 			      const chunk_t *pubkey);
-err_t unpack_EDDSA_public_key(struct EC_public_key *eddsa,
+err_t unpack_EC_public_key(struct EC_public_key *eddsa,
 			      keyid_t *keyid, ckaid_t *ckaid, size_t *size,
 			      const chunk_t *pubkey);
 
