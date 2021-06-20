@@ -153,6 +153,7 @@ const struct integ_desc ike_alg_integ_hmac_sha2_256_truncbug = {
 
 static const uint8_t asn1_blob_rsa_sha2_384[] =	{ LEN_RSA_PSS_SHA2_BLOB, RSA_PSS_SHA384_BLOB };
 static const uint8_t asn1_blob_ecdsa_sha2_384[] = { LEN_ECDSA_SHA2_BLOB, ECDSA_SHA384_BLOB };
+static const uint8_t asn1_blob_eddsa_ed25519[] = { LEN_EDDSA_ED25519_BLOB, EDDSA_ED25519_BLOB };
 
 const CK_RSA_PKCS_PSS_PARAMS rsa_pss_sha2_384 = {
 	.hashAlg = CKM_SHA384,
