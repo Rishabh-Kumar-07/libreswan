@@ -503,6 +503,13 @@ static err_t ECDSA_secret_sane(struct private_key_stuff *pks_unused UNUSED)
 	return NULL;
 }
 
+static err_t EC_secret_sane(struct private_key_stuff *pks_unused UNUSED)
+{
+	dbg("EC Algorithms are assumed to be sane");
+	return NULL;
+}
+
+
 static struct hash_signature ECDSA_sign_hash(const struct private_key_stuff *pks,
 					     const uint8_t *hash_val, size_t hash_len,
 					     const struct hash_desc *hash_algo_unused UNUSED,
@@ -564,6 +571,68 @@ static struct hash_signature ECDSA_sign_hash(const struct private_key_stuff *pks
 	return signature;
 }
 
+static struct hash_signature EC_sign_hash(const struct private_key_stuff *pks,
+					     const uint8_t *hash_val, size_t hash_len,
+					     const struct hash_desc *hash_algo_unused UNUSED,
+					     struct logger *logger)
+{
+
+	if (!pexpect(pks->private_key != NULL)) {
+		dbg("no private key!");
+		return (struct hash_signature) { .len = 0, };
+	}
+
+	DBGF(DBG_CRYPT, "EC_sign_hash: Started using NSS");
+
+	/* point HASH to sign at HASH_VAL */
+	SECItem hash_to_sign = {
+		.type = siBuffer,
+		.len = hash_len,
+		.data = DISCARD_CONST(uint8_t *, hash_val),
+	};
+
+	/* point signature at the SIG_VAL buffer */
+	uint8_t raw_signature_data[sizeof(struct hash_signature)];
+	SECItem raw_signature = {
+		.type = siBuffer,
+		.len = PK11_SignatureLen(pks->private_key),
+		.data = raw_signature_data,
+	};
+	passert(raw_signature.len <= sizeof(raw_signature_data));
+	dbg("EC signature.len %d", raw_signature.len);
+
+	/* create the raw signature */
+	SECStatus s = PK11_Sign(pks->private_key, &raw_signature, &hash_to_sign);
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump("sig_from_nss", raw_signature.data, raw_signature.len);
+	}
+	if (s != SECSuccess) {
+		/* PR_GetError() returns the thread-local error */
+		llog_nss_error(RC_LOG_SERIOUS, logger,
+			       "EC sign function failed");
+		return (struct hash_signature) { .len = 0, };
+	}
+
+	SECItem encoded_signature;
+	if (DSAU_EncodeDerSigWithLen(&encoded_signature, &raw_signature,
+				     raw_signature.len) != SECSuccess) {
+		/* PR_GetError() returns the thread-local error */
+		llog_nss_error(RC_LOG, logger,
+			       "NSS: constructing DER encoded EC signature using DSAU_EncodeDerSigWithLen() failed:");
+		return (struct hash_signature) { .len = 0, };
+	}
+	struct hash_signature signature = {
+		.len = encoded_signature.len,
+	};
+	passert(encoded_signature.len <= sizeof(signature.ptr/*an-array*/));
+	memcpy(signature.ptr, encoded_signature.data, encoded_signature.len);
+	SECITEM_FreeItem(&encoded_signature, PR_FALSE);
+
+	DBGF(DBG_CRYPT, "EC_sign_hash: Ended using NSS");
+	return signature;
+}
+
+
 const struct pubkey_type pubkey_type_ecdsa = {
 	.alg = PUBKEY_ALG_ECDSA,
 	.name = "ECDSA",
@@ -585,8 +654,8 @@ const struct pubkey_type pubkey_type_eddsa = {
 	.free_pubkey_content = EC_free_pubkey_content,
 	.extract_private_key_pubkey_content = EC_extract_private_key_pubkey_content,
 	.free_secret_content = EC_free_secret_content,
-	.secret_sane = ECDSA_secret_sane,
-	.sign_hash = ECDSA_sign_hash,
+	.secret_sane = EC_secret_sane,
+	.sign_hash = EC_sign_hash,
 	.extract_pubkey_content = EC_extract_pubkey_content,
 };
 
