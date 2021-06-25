@@ -108,9 +108,6 @@ void crypt_hash_final_bytes(struct crypt_hash **hashp,
 struct crypt_mac crypt_hash_final_mac(struct crypt_hash **hashp)
 {
 	struct crypt_hash *hash = *hashp;
-	if (strcmp(hash->desc->common.fqn, "Identity") == 0){
-        printf("Testing.");
-	}
 	struct crypt_mac output = { .len = hash->desc->hash_digest_size, };
 	passert(output.len <= sizeof(output.ptr/*array*/));
 	hash->desc->hash_ops->final_bytes(&hash->context, output.ptr, output.len);
