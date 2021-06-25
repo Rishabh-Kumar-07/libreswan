@@ -115,7 +115,7 @@ struct crypt_mac v2_calculate_sighash(const struct ike_sa *ike,
 	        size_hash += (ia1.len + ia2.len);
 	    }
 	    struct crypt_mac calc_hash;
-	    calc_hash.dptr = new uint8_t(size_hash);
+	    calc_hash.dptr = (uint8_t*)malloc(sizeof(size_hash * uint8_t));
 	    crypt_mac_load(&calc_hash, firstpacket);
 	    crypt_mac_load(&calc_hash, *nonce);
 	    if (ike->sa.st_v2_ike_intermediate_used) {
