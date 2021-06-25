@@ -109,12 +109,13 @@ struct crypt_mac v2_calculate_sighash(const struct ike_sa *ike,
 		}
 	}
 
-	if(!strcmp(hasher->common.fqn, "Identity")){
+	if(strcmp(hasher->common.fqn, "Identity") == 0){
 	    int size_hash = firstpacket.len + (*nonce).len;
 	    if (ike->sa.st_v2_ike_intermediate_used) {
 	        size_hash += (ia1.len + ia2.len);
 	    }
 	    struct crypt_mac calc_hash;
+	    calc_hash.filled = 0;
 	    calc_hash.dptr = (uint8_t*)malloc(size_hash * sizeof(uint8_t));
 	    crypt_mac_load(&calc_hash, firstpacket);
 	    crypt_mac_load(&calc_hash, *nonce);
