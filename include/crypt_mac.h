@@ -44,9 +44,3 @@ struct crypt_mac {
 extern const struct crypt_mac empty_mac;
 #endif
 
-void crypt_mac_load(struct crypt_mac *container, chunk_t packet){
-    for(size_t i = 0; i < packet.len; i++){
-        (container->dptr)[i + container->filled] = (packet.ptr)[i];
-    }
-    container->filled += packet.len;
-}

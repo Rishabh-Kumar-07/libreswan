@@ -124,6 +124,14 @@ struct crypt_mac crypt_hash_final_mac(struct crypt_hash **hashp)
 	return output;
 }
 
+void crypt_mac_load(struct crypt_mac *container, chunk_t packet){
+    for(size_t i = 0; i < packet.len; i++){
+        (container->dptr)[i + container->filled] = (packet.ptr)[i];
+    }
+    container->filled += packet.len;
+}
+
+
 PK11SymKey *crypt_hash_symkey(const char *name, const struct hash_desc *hash_desc,
 			      const char *symkey_name, PK11SymKey *symkey,
 			      struct logger *logger)
