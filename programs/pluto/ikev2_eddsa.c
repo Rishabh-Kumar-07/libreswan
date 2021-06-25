@@ -139,8 +139,8 @@ bool authsig_using_EDDSA_ikev2_pubkey(const struct crypt_mac *hash, shunk_t sign
 	struct crypt_mac hash_data = *hash;
 	SECItem hash_item = {
 		.type = siBuffer,
-		.data = hash_data.ptr,
-		.len = hash_data.len,
+		.data = hash_data.dptr,
+		.len = hash_data.filled,
 	};
 
 	if (PK11_Verify(publicKey, raw_signature, &hash_item,
