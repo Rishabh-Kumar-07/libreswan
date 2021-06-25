@@ -109,6 +109,22 @@ struct crypt_mac v2_calculate_sighash(const struct ike_sa *ike,
 		}
 	}
 
+	if(!strcmp(hasher->common.fqn, "Identity")){
+	    int size_hash = firstpacket.len + (*nonce).len;
+	    if (ike->sa.st_v2_ike_intermediate_used) {
+	        size_hash += (ia1.len + ia2.len);
+	    }
+	    struct crypt_mac calc_hash;
+	    calc_hash.dptr = new uint8_t(size_hash);
+	    crypt_mac_load(calc_hash, firstpacket);
+	    crypt_mac_load(calc_hash, *nonce);
+	    if (ike->sa.st_v2_ike_intermediate_used) {
+	        crypt_mac_load(calc_hash, ia1);
+	        crypt_mac_load(calc_hash, ia2);
+	    }
+	    return calc_hash;
+	}
+
 	struct crypt_hash *ctx = crypt_hash_init("sighash", hasher,
 						 ike->sa.st_logger);
 	crypt_hash_digest_hunk(ctx, "first packet", firstpacket);

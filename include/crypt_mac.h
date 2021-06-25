@@ -37,9 +37,16 @@ struct crypt_mac {
 	size_t len;
 	/* XXX: see note above about why this is called .ptr */
 	uint8_t ptr[64/*see ike_alg_init() for size check*/];
-	uint8_t dptr[];
+	uint8_t *dptr;
+	size_t filled = 0;
 };
 
 extern const struct crypt_mac empty_mac;
 
+void crypt_mac_load(struct crypt_mac& container, chunk_t packet){
+    for(int i = 0; i < packet.len; i++){
+        (container.dptr)[i + container.filled] = (packet.ptr)[i];
+    }
+    container.filled += packet.len;
+}
 #endif
