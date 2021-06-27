@@ -855,7 +855,7 @@ def create_ED25519_certs():
     print("creating ED25519 certs")
     #create CA
 
-    pexpect.run('openssl genpkey -algorithm ed25519'
+    run('openssl genpkey -algorithm ed25519'
                 '-outform PEM -out keys/ED25519CA.key')
     run('openssl req -x509 -new '
         '-key keys/ED25519CA.key '
