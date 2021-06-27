@@ -1054,6 +1054,7 @@ def run_dist_certs():
     create_chained_certs(chain_ca_roots, 10, 'too_long_')
     create_crlsets()
     create_ec_certs()
+    create_ED25519_certs()
 
 
 def create_nss_pw():
