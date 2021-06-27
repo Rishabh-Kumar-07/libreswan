@@ -857,26 +857,20 @@ def create_ED25519_certs():
 
     pexpect.run('openssl genpkey -algorithm ed25519'
                 '-outform PEM -out keys/ED25519CA.key')
-    child = pexpect.spawn('openssl req -x509 '
-                          '-new -key keys/ED25519CA.key '
-                          '-out cacerts/ED25519CA.crt '
-                          '-days 3650 -set_serial 1')
-    child.expect('Country Name')
-    child.sendline('CA')
-    child.expect('State')
-    child.sendline('Ontario')
-    child.expect('Locality')
-    child.sendline('Toronto')
-    child.expect('Organization')
-    child.sendline('Libreswan')
-    child.expect('Organizational')
-    child.sendline('Test Department')
-    child.expect('Common')
-    child.sendline('Libreswan test EC CA')
-    child.expect('Email')
-    child.sendline('testing@libreswan.org')
-    child.expect(pexpect.EOF)
-
+    run('openssl req -x509 -new '
+        '-key keys/ED25519CA.key '
+        '-out cacerts/ED25519CA.crt '
+        '-days 3650 -set_serial 1',
+        # must match create_root_ca(<<mainca>>)
+        events = {
+            'Country Name': 'CA\r',
+            'State': 'Ontario\r',
+            'Locality': 'Toronto\r',
+            'Organization': 'Libreswan\r',
+            'Organizational': 'Test Department\r',
+            'Common': 'Libreswan test CA for mainca\r',
+            'Email': 'testing@libreswan.org\r',
+        })
     serial = 2
     for name in ['east', 'west', 'north', 'road']:
         print("- creating %s-ED25519"% name)
