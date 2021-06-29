@@ -2162,6 +2162,7 @@ static const char *const pkk_name[] = {
 	"PKK_XAUTH",
 	"PKK_PPK",
 	"PKK_ECDSA",
+	"PKK_EC",
 	"PKK_NULL",
 	"PKK_INVALID",
 };
