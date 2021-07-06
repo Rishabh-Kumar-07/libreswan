@@ -45,6 +45,7 @@ static const uint8_t rsa_sha1_der_header[] = {
 
 struct crypt_mac v2_calculate_sighash(const struct ike_sa *ike,
 				      const struct crypt_mac *idhash,
+				      struct crypt_mac_d *hashed_data,
 				      const struct hash_desc *hasher,
 				      enum perspective from_the_perspective_of)
 {
@@ -109,16 +110,16 @@ struct crypt_mac v2_calculate_sighash(const struct ike_sa *ike,
 		}
 	}
 
-	if(strcmp(hasher->common.fqn, "Identity") == 0){
+	if(streq(hasher->common.fqn, "Identity")){
 	    int size_hash = firstpacket.len + (*nonce).len;
 	    if (ike->sa.st_v2_ike_intermediate_used) {
 	        size_hash += (ia1.len + ia2.len);
 	    }
 	    struct crypt_mac calc_hash;
-	    calc_hash.filled = 0;
-	    calc_hash.dptr = (uint8_t*)malloc(size_hash * sizeof(uint8_t));
-	    crypt_mac_load(&calc_hash, firstpacket);
-	    crypt_mac_load(&calc_hash, *nonce);
+	    hashed_data->filled = 0;
+	    hashed_data->dptr = (uint8_t*)malloc(size_hash * sizeof(uint8_t));
+	    crypt_mac_load(hashed_data, firstpacket);
+	    crypt_mac_load(hashed_data, *nonce);
 	    if (ike->sa.st_v2_ike_intermediate_used) {
 	        crypt_mac_load(&calc_hash, ia1);
 	        crypt_mac_load(&calc_hash, ia2);

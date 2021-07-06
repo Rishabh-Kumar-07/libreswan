@@ -33,6 +33,7 @@ enum perspective;
 
 struct crypt_mac v2_calculate_sighash(const struct ike_sa *ike,
 				      const struct crypt_mac *idhash,
+				      struct crypt_mac_d *hashed_data,
 				      const struct hash_desc *hasher,
 				      enum perspective from_the_perspective_of);
 

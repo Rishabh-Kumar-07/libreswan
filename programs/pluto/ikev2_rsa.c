@@ -75,7 +75,7 @@ bool ikev2_calculate_rsa_hash(struct ike_sa *ike,
 		return false; /* failure: no key to use */
 	}
 
-	struct crypt_mac hash = v2_calculate_sighash(ike, idhash, hash_algo,
+	struct crypt_mac hash = v2_calculate_sighash(ike, idhash, NULL, hash_algo,
 						     LOCAL_PERSPECTIVE);
 	passert(hash.len <= sizeof(hash.ptr/*array*/));
 
@@ -158,7 +158,7 @@ diag_t v2_authsig_and_log_using_RSA_pubkey(struct ike_sa *ike,
 		return diag("authentication failed: rejecting received zero-length RSA signature");
 	}
 
-	struct crypt_mac hash = v2_calculate_sighash(ike, idhash, hash_algo,
+	struct crypt_mac hash = v2_calculate_sighash(ike, idhash, NULL, hash_algo,
 						     REMOTE_PERSPECTIVE);
 	diag_t d = authsig_and_log_using_pubkey(ike, &hash, signature, hash_algo,
 						&pubkey_type_rsa, authsig_using_RSA_pubkey);

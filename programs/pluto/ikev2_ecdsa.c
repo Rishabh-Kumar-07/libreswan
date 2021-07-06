@@ -176,7 +176,7 @@ diag_t v2_authsig_and_log_using_ECDSA_pubkey(struct ike_sa *ike,
 		return diag("authentication failed: unknown or unsupported hash algorithm");
 	}
 
-	struct crypt_mac calc_hash = v2_calculate_sighash(ike, idhash, hash_algo,
+	struct crypt_mac calc_hash = v2_calculate_sighash(ike, idhash, NULL, hash_algo,
 							  REMOTE_PERSPECTIVE);
 	diag_t d = authsig_and_log_using_pubkey(ike, &calc_hash, signature, hash_algo,
 						&pubkey_type_ecdsa,

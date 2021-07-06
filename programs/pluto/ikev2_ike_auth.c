@@ -186,7 +186,7 @@ stf_status ikev2_in_IKE_SA_INIT_R_or_IKE_INTERMEDIATE_R_out_IKE_AUTH_I_continue(
 		{
 			const struct hash_desc *hash_algo = &ike_alg_hash_sha1;
 			struct crypt_mac hash_to_sign =
-				v2_calculate_sighash(ike, &ike->sa.st_v2_id_payload.mac,
+				v2_calculate_sighash(ike, &ike->sa.st_v2_id_payload.mac, NULL,
 						     hash_algo, LOCAL_PERSPECTIVE);
 			if (!submit_v2_auth_signature(ike, &hash_to_sign, hash_algo,
 						      authby, auth_method,
@@ -203,7 +203,7 @@ stf_status ikev2_in_IKE_SA_INIT_R_or_IKE_INTERMEDIATE_R_out_IKE_AUTH_I_continue(
 				return STF_FATAL;
 			}
 			struct crypt_mac hash_to_sign =
-				v2_calculate_sighash(ike, &ike->sa.st_v2_id_payload.mac,
+				v2_calculate_sighash(ike, &ike->sa.st_v2_id_payload.mac, NULL,
 						     hash_algo, LOCAL_PERSPECTIVE);
 			if (!submit_v2_auth_signature(ike, &hash_to_sign, hash_algo,
 						      authby, auth_method,
@@ -1053,7 +1053,7 @@ static stf_status process_v2_IKE_AUTH_request_tail(struct state *ike_st,
 		{
 			const struct hash_desc *hash_algo = &ike_alg_hash_sha1;
 			struct crypt_mac hash_to_sign =
-				v2_calculate_sighash(ike, &ike->sa.st_v2_id_payload.mac,
+				v2_calculate_sighash(ike, &ike->sa.st_v2_id_payload.mac, NULL,
 						     hash_algo, LOCAL_PERSPECTIVE);
 			ike->sa.st_v2_ike_intermediate_used = false;
 			if (!submit_v2_auth_signature(ike, &hash_to_sign, hash_algo,
@@ -1077,7 +1077,7 @@ static stf_status process_v2_IKE_AUTH_request_tail(struct state *ike_st,
 				return STF_FATAL;
 			}
 			struct crypt_mac hash_to_sign =
-				v2_calculate_sighash(ike, &ike->sa.st_v2_id_payload.mac,
+				v2_calculate_sighash(ike, &ike->sa.st_v2_id_payload.mac, NULL,
 						     hash_algo, LOCAL_PERSPECTIVE);
 			ike->sa.st_v2_ike_intermediate_used = false;
 			if (!submit_v2_auth_signature(ike, &hash_to_sign, hash_algo,
