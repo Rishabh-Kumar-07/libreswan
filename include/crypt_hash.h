@@ -73,6 +73,6 @@ PK11SymKey *crypt_hash_symkey(const char *hash_name,
 			      const char *symkey_name, PK11SymKey *symkey,
 			      struct logger *logger);
 
-void crypt_mac_load(struct crypt_mac *container, chunk_t packet);
+void crypt_mac_load(struct crypt_mac_d *container, chunk_t packet);
 
 #endif
