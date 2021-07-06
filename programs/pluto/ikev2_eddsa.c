@@ -139,8 +139,7 @@ bool authsig_using_EDDSA_ikev2_pubkey(const struct crypt_mac *hash, shunk_t sign
 	struct crypt_mac hash_data = *hash;
 	SECItem hash_item = {
 		.type = siBuffer,
-		.data = hash_data.dptr,
-		.len = hash_data.filled,
+		.data = hash_data.ptr,
 	};
 
 	if (PK11_Verify(publicKey, raw_signature, &hash_item,
@@ -174,8 +173,8 @@ diag_t v2_authsig_and_log_using_EDDSA_pubkey(struct ike_sa *ike,
 	struct crypt_mac_d calc_hash;
 	v2_calculate_sighash(ike, idhash, &calc_hash, hash_algo,
 							  REMOTE_PERSPECTIVE);
-	struct crypt_mac d;
-	diag_t d = authsig_and_log_using_pubkey(ike, &d, signature, hash_algo,
+	struct crypt_mac e;
+	diag_t d = authsig_and_log_using_pubkey(ike, &e, signature, hash_algo,
 						&pubkey_type_eddsa,
 						authsig_using_EDDSA_ikev2_pubkey);
 	statetime_stop(&start, "%s()", __func__);
