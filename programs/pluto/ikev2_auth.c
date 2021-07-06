@@ -121,8 +121,8 @@ struct crypt_mac v2_calculate_sighash(const struct ike_sa *ike,
 	    crypt_mac_load(hashed_data, firstpacket);
 	    crypt_mac_load(hashed_data, *nonce);
 	    if (ike->sa.st_v2_ike_intermediate_used) {
-	        crypt_mac_load(&calc_hash, ia1);
-	        crypt_mac_load(&calc_hash, ia2);
+	        crypt_mac_load(hashed_data, ia1);
+	        crypt_mac_load(hashed_data, ia2);
 	    }
 	    return calc_hash;
 	}
