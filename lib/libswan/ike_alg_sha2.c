@@ -190,7 +190,7 @@ const struct hash_desc ike_alg_hash_identity = {
 		.fqn = "IDENTITY_HASH",
 		.names = "IDENTITY_HASH",
 		.algo_type = IKE_ALG_HASH,
-		.id = {,
+		.id = {
 			[IKEv2_ALG_ID] =  IKEv2_HASH_ALGORITHM_IDENTITY,
 		},
 		.fips = false,
