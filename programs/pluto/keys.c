@@ -368,7 +368,7 @@ struct tac_state {
 
 static bool try_all_keys(const char *cert_origin,
 			 struct pubkey_list *pubkey_db,
-			 struct tac_state *s)
+			 struct tac_state *s, struct crypt_mac_d *hashD)
 {
 	id_buf thatid;
 	dbg("trying all '%s's for %s key that matches ID: %s",
@@ -436,7 +436,7 @@ static bool try_all_keys(const char *cert_origin,
 		logtime_t try_time = logtime_start(s->logger);
 		bool passed = (s->try_pubkey)(s->hash, s->signature,
 						 key, s->hash_algo,
-						 &s->fatal_diag, s->logger);
+						 &s->fatal_diag, s->logger, hashD);
 		logtime_stop(&try_time, "%s() trying a pubkey", __func__);
 
 		if (s->fatal_diag != NULL) {
@@ -463,6 +463,7 @@ static bool try_all_keys(const char *cert_origin,
 
 diag_t authsig_and_log_using_pubkey(struct ike_sa *ike,
 				    const struct crypt_mac *hash,
+				    const struct crypt_mac_d *hashD,
 				    shunk_t signature,
 				    const struct hash_desc *hash_algo,
 				    const struct pubkey_type *type,
@@ -513,9 +514,9 @@ diag_t authsig_and_log_using_pubkey(struct ike_sa *ike,
 		pp = &(*pp)->next;
 	}
 
-	bool stop = try_all_keys("peer", ike->sa.st_remote_certs.pubkey_db, &s);
+	bool stop = try_all_keys("peer", ike->sa.st_remote_certs.pubkey_db, &s, hashD);
 	if (!stop) {
-		stop = try_all_keys("preloaded", pluto_pubkeys, &s);
+		stop = try_all_keys("preloaded", pluto_pubkeys, &s, hashD);
 	}
 
 	if (s.fatal_diag != NULL) {

@@ -160,7 +160,7 @@ diag_t v2_authsig_and_log_using_RSA_pubkey(struct ike_sa *ike,
 
 	struct crypt_mac hash = v2_calculate_sighash(ike, idhash, NULL, hash_algo,
 						     REMOTE_PERSPECTIVE);
-	diag_t d = authsig_and_log_using_pubkey(ike, &hash, signature, hash_algo,
+	diag_t d = authsig_and_log_using_pubkey(ike, &hash, NULL, signature, hash_algo,
 						&pubkey_type_rsa, authsig_using_RSA_pubkey);
 	statetime_stop(&start, "%s()", __func__);
 	return d;

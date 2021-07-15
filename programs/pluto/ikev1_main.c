@@ -1323,7 +1323,7 @@ stf_status oakley_id_and_auth(struct msg_digest *md, bool initiator,
 	case OAKLEY_RSA_SIG:
 	{
 		shunk_t signature = pbs_in_left_as_shunk(&md->chain[ISAKMP_NEXT_SIG]->pbs);
-		diag_t d = authsig_and_log_using_pubkey(ike_sa(st, HERE), &hash, signature,
+		diag_t d = authsig_and_log_using_pubkey(ike_sa(st, HERE), &hash, NULL, signature,
 							&ike_alg_hash_sha1, /*always*/
 							&pubkey_type_rsa,
 							authsig_using_RSA_pubkey);

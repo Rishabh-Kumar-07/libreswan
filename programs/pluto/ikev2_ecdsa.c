@@ -178,7 +178,7 @@ diag_t v2_authsig_and_log_using_ECDSA_pubkey(struct ike_sa *ike,
 
 	struct crypt_mac calc_hash = v2_calculate_sighash(ike, idhash, NULL, hash_algo,
 							  REMOTE_PERSPECTIVE);
-	diag_t d = authsig_and_log_using_pubkey(ike, &calc_hash, signature, hash_algo,
+	diag_t d = authsig_and_log_using_pubkey(ike, &calc_hash, NULL, signature, hash_algo,
 						&pubkey_type_ecdsa,
 						authsig_using_ECDSA_ikev2_pubkey);
 	statetime_stop(&start, "%s()", __func__);

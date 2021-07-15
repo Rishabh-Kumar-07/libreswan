@@ -88,6 +88,7 @@ extern authsig_using_pubkey_fn authsig_using_RSA_pubkey;
 
 extern diag_t authsig_and_log_using_pubkey(struct ike_sa *ike,
 					   const struct crypt_mac *hash,
+					   const struct crypt_mac_d *hashD,
 					   shunk_t signature,
 					   const struct hash_desc *hash_algo,
 					   const struct pubkey_type *type,
