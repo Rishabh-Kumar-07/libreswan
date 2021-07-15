@@ -130,6 +130,7 @@ OBJS += keywords.o
 
 OBJS += DBG_dump.o
 OBJS += DBG_log.o
+OBJS += DBG_va_list.o
 
 OBJS += log_error.o
 OBJS += fatal.o
