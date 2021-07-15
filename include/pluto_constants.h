@@ -997,6 +997,7 @@ enum sighash_policy_bits {
 	POL_SIGHASH_SHA2_256_IX,
 	POL_SIGHASH_SHA2_384_IX,
 	POL_SIGHASH_SHA2_512_IX,
+	POL_SIGHASH_IDENTITY,
 };
 
 extern const struct enum_names sighash_policy_bit_names;
@@ -1004,6 +1005,7 @@ extern const struct enum_names sighash_policy_bit_names;
 #define POL_SIGHASH_SHA2_256 LELEM(POL_SIGHASH_SHA2_256_IX)
 #define POL_SIGHASH_SHA2_384 LELEM(POL_SIGHASH_SHA2_384_IX)
 #define POL_SIGHASH_SHA2_512 LELEM(POL_SIGHASH_SHA2_512_IX)
+#define POL_SIGHASH_IDENTITY LELEM(POL_SIGHASH_IDENTITY_IX)
 
 /* Default policy for now is using RSA - this might change to ECC */
 #define POLICY_DEFAULT POLICY_RSASIG
