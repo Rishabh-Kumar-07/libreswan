@@ -347,17 +347,17 @@ const struct pubkey_type pubkey_type_rsa = {
 	.sign_hash = RSA_sign_hash,
 };
 
-static err_t ECDSA_unpack_pubkey_content(union pubkey_content *u,
+static err_t EC_unpack_pubkey_content(union pubkey_content *u,
 					 keyid_t *keyid, ckaid_t *ckaid, size_t *size,
 					 chunk_t pubkey)
 {
-	return unpack_ECDSA_public_key(&u->ecdsa, keyid, ckaid, size, &pubkey);
+	return unpack_EC_public_key(&u->ecPub, keyid, ckaid, size, &pubkey);
 }
 
-static void ECDSA_free_public_content(struct ECDSA_public_key *ecdsa)
+static void EC_free_public_content(struct EC_public_key *ecKey)
 {
-	free_chunk_content(&ecdsa->pub);
-	free_chunk_content(&ecdsa->ecParams);
+	free_chunk_content(&ecKey->pub);
+	free_chunk_content(&ecKey->ecParams);
 	/* ckaid is an embedded struct (no pointer) */
 	/*
 	 * ??? what about ecdsa->pub.{version,ckaid}?
@@ -367,18 +367,18 @@ static void ECDSA_free_public_content(struct ECDSA_public_key *ecdsa)
 	 */
 }
 
-static void ECDSA_free_pubkey_content(union pubkey_content *u)
+static void EC_free_pubkey_content(union pubkey_content *u)
 {
-	ECDSA_free_public_content(&u->ecdsa);
+	EC_free_public_content(&u->ecPub);
 }
 
-static void ECDSA_extract_public_key(struct ECDSA_public_key *pub,
+static void EC_extract_public_key(struct EC_public_key *pub,
 				     keyid_t *keyid, ckaid_t *ckaid, size_t *size,
 				     SECKEYPublicKey *pubkey_nss,
 				     SECItem *ckaid_nss)
 {
-	pub->pub = clone_secitem_as_chunk(pubkey_nss->u.ec.publicValue, "ECDSA pub");
-	pub->ecParams = clone_secitem_as_chunk(pubkey_nss->u.ec.DEREncodedParams, "ECDSA ecParams");
+	pub->pub = clone_secitem_as_chunk(pubkey_nss->u.ec.publicValue, "EC pub");
+	pub->ecParams = clone_secitem_as_chunk(pubkey_nss->u.ec.DEREncodedParams, "EC ecParams");
 	*size = pubkey_nss->u.ec.publicValue.len;
 	*ckaid = ckaid_from_secitem(ckaid_nss);
 	/* keyid */
@@ -394,29 +394,29 @@ static void ECDSA_extract_public_key(struct ECDSA_public_key *pub,
 	}
 }
 
-static void ECDSA_extract_pubkey_content(union pubkey_content *pkc,
+static void EC_extract_pubkey_content(union pubkey_content *pkc,
 					 keyid_t *keyid, ckaid_t *ckaid, size_t *size,
 					 SECKEYPublicKey *pubkey_nss,
 					 SECItem *ckaid_nss)
 {
-	ECDSA_extract_public_key(&pkc->ecdsa, keyid, ckaid, size, pubkey_nss, ckaid_nss);
+	EC_extract_public_key(&pkc->ecPub, keyid, ckaid, size, pubkey_nss, ckaid_nss);
 }
 
-static void ECDSA_extract_private_key_pubkey_content(struct private_key_stuff *pks,
+static void EC_extract_private_key_pubkey_content(struct private_key_stuff *pks,
 						     keyid_t *keyid, ckaid_t *ckaid, size_t *size,
 						     SECKEYPublicKey *pubkey_nss,
 						     SECItem *ckaid_nss)
 {
-	struct ECDSA_private_key *ecdsak = &pks->u.ECDSA_private_key;
-	ECDSA_extract_public_key(&ecdsak->pub, keyid, ckaid, size,
+	struct EC_private_key *ecKey = &pks->u.EC_private_key;
+	EC_extract_public_key(&ecKey->pub, keyid, ckaid, size,
 				 pubkey_nss, ckaid_nss);
 }
 
-static void ECDSA_free_secret_content(struct private_key_stuff *pks)
+static void EC_free_secret_content(struct private_key_stuff *pks)
 {
 	SECKEY_DestroyPrivateKey(pks->private_key);
-	struct ECDSA_private_key *ecdsak = &pks->u.ECDSA_private_key;
-	ECDSA_free_public_content(&ecdsak->pub);
+	struct EC_private_key *ecKey = &pks->u.EC_private_key;
+	EC_free_public_content(&ecKey->pub);
 }
 
 /*
@@ -424,9 +424,9 @@ static void ECDSA_free_secret_content(struct private_key_stuff *pks)
  * implement this, so there is no ECDSA curve that libreswan needs to
  * disallow for security reasons
  */
-static err_t ECDSA_secret_sane(struct private_key_stuff *pks_unused UNUSED)
+static err_t EC_secret_sane(struct private_key_stuff *pks_unused UNUSED)
 {
-	dbg("ECDSA is assumed to be sane");
+	dbg("EC Algorithms are assumed to be sane");
 	return NULL;
 }
 
@@ -494,14 +494,14 @@ static struct hash_signature ECDSA_sign_hash(const struct private_key_stuff *pks
 const struct pubkey_type pubkey_type_ecdsa = {
 	.alg = PUBKEY_ALG_ECDSA,
 	.name = "ECDSA",
-	.private_key_kind = PKK_ECDSA,
-	.unpack_pubkey_content = ECDSA_unpack_pubkey_content,
-	.free_pubkey_content = ECDSA_free_pubkey_content,
-	.extract_private_key_pubkey_content = ECDSA_extract_private_key_pubkey_content,
-	.free_secret_content = ECDSA_free_secret_content,
-	.secret_sane = ECDSA_secret_sane,
+	.private_key_kind = PKK_EC,
+	.unpack_pubkey_content = EC_unpack_pubkey_content,
+	.free_pubkey_content = EC_free_pubkey_content,
+	.extract_private_key_pubkey_content = EC_extract_private_key_pubkey_content,
+	.free_secret_content = EC_free_secret_content,
+	.secret_sane = EC_secret_sane,
 	.sign_hash = ECDSA_sign_hash,
-	.extract_pubkey_content = ECDSA_extract_pubkey_content,
+	.extract_pubkey_content = EC_extract_pubkey_content,
 };
 
 const struct pubkey_type *pubkey_alg_type(enum pubkey_alg alg)
@@ -754,7 +754,7 @@ struct secret *lsw_find_secret_by_id(struct secret *secrets,
 							&s->pks.u.RSA_private_key.pub,
 							&best->pks.u.RSA_private_key.pub);
 						break;
-					case PKK_ECDSA:
+					case PKK_EC:
 						/* there are no ECDSA kind of secrets */
 						/* ??? this seems not to be the case */
 						break;
@@ -1504,7 +1504,7 @@ void lsw_free_preshared_secrets(struct secret **psecrets, struct logger *logger)
 				pfree(s->pks.u.preshared_secret.ptr);
 				break;
 			case PKK_RSA:
-			case PKK_ECDSA:
+			case PKK_EC:
 				/* Note: pub is all there is */
 				s->pks.pubkey_type->free_secret_content(&s->pks);
 				break;
