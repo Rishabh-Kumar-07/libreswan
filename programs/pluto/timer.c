@@ -55,7 +55,9 @@
 #include "ikev2_redirect.h"
 #include "pending.h" /* for flush_pending_by_connection */
 #include "ikev1_xauth.h"
+#ifdef USE_PAM_AUTH
 #include "pam_auth.h"
+#endif
 #include "kernel.h"		/* for kernel_ops */
 #include "nat_traversal.h"
 #include "pluto_sd.h"
@@ -293,7 +295,7 @@ static void timer_event_cb(evutil_socket_t unused_fd UNUSED,
 			dbg("%s SA expired (superseded by #%lu)",
 			    satype, newer_sa);
 		} else if (!IS_IKE_SA_ESTABLISHED(st) &&
-			   !IS_ISAKMP_SA_ESTABLISHED(st)) {
+			   !IS_V1_ISAKMP_SA_ESTABLISHED(st)) {
 			/* not very interesting: failed IKE attempt */
 			dbg("un-established partial Child SA timeout (SA expired)");
 			pstat_sa_failed(st, REASON_EXCHANGE_TIMEOUT);
@@ -397,10 +399,10 @@ static void timer_event_cb(evutil_socket_t unused_fd UNUSED,
 		dpd_timeout(st);
 		break;
 
-#ifdef AUTH_HAVE_PAM
+#ifdef USE_PAM_AUTH
 	case EVENT_PAM_TIMEOUT:
 		dbg("PAM thread timeout on state #%lu", st->st_serialno);
-		pamauth_abort(st);
+		pam_auth_abort(st, "timeout");
 		/*
 		 * Things get cleaned up when the PAM process exits.
 		 *

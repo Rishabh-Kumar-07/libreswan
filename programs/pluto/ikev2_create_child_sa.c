@@ -63,6 +63,7 @@ static ikev2_state_transition_fn process_v2_CREATE_CHILD_SA_child_response;
 static ikev2_state_transition_fn record_v2_CREATE_CHILD_SA_request;
 
 static ke_and_nonce_cb queue_v2_CREATE_CHILD_SA_initiator; /* signature check */
+
 stf_status queue_v2_CREATE_CHILD_SA_initiator(struct state *larval_sa,
 					      struct msg_digest *unused_md,
 					      struct dh_local_secret *local_secret,
@@ -203,17 +204,11 @@ static bool ikev2_rekey_child_req(struct child_sa *child,
 		return false;
 	}
 
-	child->sa.st_ts_this = rst->st_ts_this;
-	child->sa.st_ts_that = rst->st_ts_that;
-
 	connection_buf cib;
 	dbg("#%lu initiate rekey request for "PRI_CONNECTION" #%lu SPI 0x%x TSi TSr",
 	    child->sa.st_serialno,
 	    pri_connection(rst->st_connection, &cib),
 	    rst->st_serialno, ntohl(*rekey_spi));
-
-	ikev2_print_ts(&child->sa.st_ts_this);
-	ikev2_print_ts(&child->sa.st_ts_that);
 
 	return true;
 }
@@ -322,8 +317,6 @@ static bool ikev2_rekey_child_resp(struct ike_sa *ike, struct child_sa *child,
 	    child->sa.st_serialno,
 	    pri_connection(replaced_child->sa.st_connection, &cb),
 	    replaced_child->sa.st_serialno);
-	ikev2_print_ts(&replaced_child->sa.st_ts_this);
-	ikev2_print_ts(&replaced_child->sa.st_ts_that);
 	update_state_connection(&child->sa, replaced_child->sa.st_connection);
 
 	return true;
@@ -354,12 +347,6 @@ static bool ikev2_rekey_child_copy_ts(struct child_sa *child)
 	    child->sa.st_serialno,
 	    pri_connection(rchild->sa.st_connection, &cib),
 	    rchild->sa.st_serialno);
-
-	struct spd_route *spd = &rchild->sa.st_connection->spd;
-	child->sa.st_ts_this = traffic_selector_from_end(&spd->this);
-	child->sa.st_ts_that = traffic_selector_from_end(&spd->that);
-	ikev2_print_ts(&child->sa.st_ts_this);
-	ikev2_print_ts(&child->sa.st_ts_that);
 
 	return true;
 }
@@ -438,12 +425,6 @@ static stf_status emit_v2_child_sa_request_payloads(struct child_sa *child,
 				   rekey_protoid, &rekey_spi,
 				   outpbs, NULL))
 			return STF_INTERNAL_ERROR;
-	}
-
-	if (rekey_spi == 0) {
-		/* not rekey */
-		child->sa.st_ts_this = traffic_selector_from_end(&cc->spd.this);
-		child->sa.st_ts_that = traffic_selector_from_end(&cc->spd.that);
 	}
 
 	emit_v2TS_payloads(outpbs, child);
@@ -585,13 +566,14 @@ struct child_sa *submit_v2_CREATE_CHILD_SA_rekey_child(struct ike_sa *ike,
 	larval_child->sa.st_pfs_group = ikev2_proposals_first_dh(child_proposals, logger);
 
 	policy_buf pb;
-	dbg("#%lu submitting crypto needed to rekey Child SA #%lu using IKE SA #%lu policy=%s pfs=%s",
+	dbg("#%lu submitting crypto needed to rekey Child SA #%lu using IKE SA #%lu policy=%s pfs=%s sec_label="PRI_SHUNK,
 	    larval_child->sa.st_serialno,
 	    child_being_replaced->sa.st_serialno,
 	    ike->sa.st_serialno,
 	    str_policy(larval_child->sa.st_policy, &pb),
 	    (larval_child->sa.st_pfs_group == NULL ? "no-pfs" :
-	     larval_child->sa.st_pfs_group->common.fqn));
+	     larval_child->sa.st_pfs_group->common.fqn),
+	    pri_shunk(c->spd.this.sec_label));
 
 	submit_ke_and_nonce(&larval_child->sa, larval_child->sa.st_pfs_group /*possibly-null*/,
 			    queue_v2_CREATE_CHILD_SA_initiator,
@@ -653,8 +635,8 @@ void submit_v2_CREATE_CHILD_SA_new_child(struct ike_sa *ike,
 		c = instantiate(c, &remote_addr, NULL);
 		/* replace connection template label with ACQUIREd label */
 		free_chunk_content(&c->spd.this.sec_label);
-		c->spd.this.sec_label = clone_hunk(sec_label, "ACQUIRED sec_label");
 		free_chunk_content(&c->spd.that.sec_label);
+		c->spd.this.sec_label = clone_hunk(sec_label, "ACQUIRED sec_label");
 		c->spd.that.sec_label = clone_hunk(sec_label, "ACQUIRED sec_label");
 	}
 
@@ -1089,8 +1071,8 @@ stf_status initiate_v2_CREATE_CHILD_SA_rekey_ike_request(struct ike_sa *ike,
 static ke_and_nonce_cb process_v2_CREATE_CHILD_SA_rekey_ike_request_continue;
 
 stf_status process_v2_CREATE_CHILD_SA_rekey_ike_request(struct ike_sa *ike,
-				   struct child_sa *larval_ike,
-				   struct msg_digest *md)
+							struct child_sa *larval_ike,
+							struct msg_digest *md)
 {
 	pexpect(larval_ike != NULL); /* not yet emancipated */
 	pexpect(ike != NULL);
@@ -1139,16 +1121,9 @@ stf_status process_v2_CREATE_CHILD_SA_rekey_ike_request(struct ike_sa *ike,
 
 	if (!ikev2_proposal_to_trans_attrs(larval_ike->sa.st_accepted_ike_proposal,
 					   &larval_ike->sa.st_oakley, larval_ike->sa.st_logger)) {
-		log_state(RC_LOG_SERIOUS, &larval_ike->sa,
-			  "IKE responder accepted an unsupported algorithm");
-		/*
-		 * XXX; where is 'st' freed?  Should the code instead
-		 * tunnel back md.st==st and return STF_FATAL which
-		 * will delete the child state?  Or perhaps there a
-		 * lurking SO_DISPOSE to clean it up?
-		 */
-		switch_md_st(md, &ike->sa, HERE);
-		return STF_IGNORE;
+		llog_sa(RC_LOG_SERIOUS, larval_ike,
+			"IKE responder accepted an unsupported algorithm");
+		return STF_FATAL;
 	}
 
 	if (!v2_accept_ke_for_proposal(ike, &larval_ike->sa, md,
@@ -1267,8 +1242,8 @@ static stf_status process_v2_CREATE_CHILD_SA_rekey_ike_request_continue_continue
 static dh_shared_secret_cb process_v2_CREATE_CHILD_SA_rekey_ike_response_continue;
 
 stf_status process_v2_CREATE_CHILD_SA_rekey_ike_response(struct ike_sa *ike,
-			       struct child_sa *larval_ike,
-			       struct msg_digest *md)
+							 struct child_sa *larval_ike,
+							 struct msg_digest *md)
 {
 	pexpect(larval_ike != NULL);
 	struct state *st = &larval_ike->sa;
@@ -1311,12 +1286,12 @@ stf_status process_v2_CREATE_CHILD_SA_rekey_ike_response(struct ike_sa *ike,
 	}
 	if (!ikev2_proposal_to_trans_attrs(larval_ike->sa.st_accepted_ike_proposal,
 					   &larval_ike->sa.st_oakley, larval_ike->sa.st_logger)) {
-		log_state(RC_LOG_SERIOUS, &larval_ike->sa, "IKE responder accepted an unsupported algorithm");
+		llog_sa(RC_LOG_SERIOUS, larval_ike,
+			"IKE responder accepted an unsupported algorithm");
 		/* free early return items */
 		free_ikev2_proposal(&larval_ike->sa.st_accepted_ike_proposal);
 		passert(larval_ike->sa.st_accepted_ike_proposal == NULL);
-		switch_md_st(md, &ike->sa, HERE);
-		return STF_FAIL;
+		return STF_FATAL;
 	}
 
 	 /* KE in */

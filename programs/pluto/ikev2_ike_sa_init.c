@@ -571,9 +571,9 @@ void ikev2_out_IKE_SA_INIT_I(struct connection *c,
 		struct connection *d = instantiate(c, &remote_address, NULL);
 		/* replace connection template label with ACQUIREd label */
 		free_chunk_content(&d->spd.this.sec_label);
-		d->spd.this.sec_label = clone_hunk(sec_label, "ACQUIRED sec_label");
 		free_chunk_content(&d->spd.that.sec_label);
-		d->spd.that.sec_label = clone_hunk(sec_label, "ACQUIRED sec_label");
+		d->spd.this.sec_label = clone_hunk(sec_label, "IKE_SA_INIT sec_label");
+		d->spd.that.sec_label = clone_hunk(sec_label, "IKE_SA_INIT sec_label");
 		add_pending(background ? null_fd : ike->sa.st_logger->global_whackfd, ike, d, policy, 1,
 			    /*predecessor*/SOS_NOBODY,
 			    sec_label, true /*part of initiate*/);
@@ -627,8 +627,14 @@ void ikev2_out_IKE_SA_INIT_I(struct connection *c,
 	}
 
 	if (IS_LIBUNBOUND && id_ipseckey_allowed(ike, IKEv2_AUTH_RESERVED)) {
-		stf_status ret = idr_ipseckey_fetch(ike);
-		if (ret != STF_OK) {
+		/*
+		 * This runs in the background?  How is it ever
+		 * synced?
+		 */
+		if (!initiator_fetch_idr_ipseckey(ike)) {
+			llog_sa(RC_LOG_SERIOUS, ike,
+				"fetching IDr IPsec key using DNS failed");
+			delete_state(&ike->sa);
 			return;
 		}
 	}
