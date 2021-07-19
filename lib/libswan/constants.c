@@ -486,7 +486,7 @@ static enum_names exchange_names_doi_and_v2 = {
 	&ikev2_exchange_names
 };
 
-enum_names exchange_names_ikev1orv2 = {
+enum_names isakmp_xchg_type_names = {
 	ISAKMP_XCHG_NONE,
 	ISAKMP_XCHG_MODE_CFG,
 	ARRAY_REF(exchange_name_ikev1),
@@ -683,21 +683,24 @@ enum_names esp_transformid_names = {
 };
 
 /* IPCOMP transform values */
-static const char *const ipcomp_transform_name[] = {
-	"IPCOMP_OUI",
-	"IPCOMP_DEFLAT",
-	"IPCOMP_LZS",
-	"IPCOMP_LZJH",
+static const char *const ipsec_ipcomp_algo_name[] = {
+#define P(N) [N] = #N
+	P(IPCOMP_NONE),
+	P(IPCOMP_OUI),
+	P(IPCOMP_DEFLATE),
+	P(IPCOMP_LZS),
+	P(IPCOMP_LZJH),
 	/* 5-47 Reserved for approved algorithms */
 	/* 48-63 Reserved for private use */
 	/* 64-255 Unassigned */
+#undef P
 };
 
-enum_names ipcomp_transformid_names = {
-	IPCOMP_OUI,
+enum_names ipsec_ipcomp_algo_names = {
+	IPCOMP_NONE,
 	IPCOMP_LZJH,
-	ARRAY_REF(ipcomp_transform_name),
-	NULL, /* prefix */
+	ARRAY_REF(ipsec_ipcomp_algo_name),
+	"IPCOMP_", /* prefix */
 	NULL
 };
 
@@ -2212,18 +2215,21 @@ enum_names ikev2_redirect_gw_names = {
 	NULL
 };
 
-/* magic SPI values (specific to Libreswan: see <libreswan.h>) */
-static const char *const spi_name[] = {
+/* magic SPI values (specific to Libreswan */
+
+static const char *const policy_spi_name[] = {
 	"%pass",
 	"%drop",
 	"%reject",
 	"%hold",
 	"%trap",
+	"%ignore",
 	"%trapsubnet",
 };
-enum_names spi_names = {
+
+enum_names policy_spi_names = {
 	SPI_PASS, SPI_TRAPSUBNET,
-	ARRAY_REF(spi_name),
+	ARRAY_REF(policy_spi_name),
 	"%",	/* prefix */
 	NULL
 };
@@ -2595,12 +2601,12 @@ static const enum_names *en_checklist[] = {
 	&payload_names_ikev1orv2,
 	&ikev2_last_proposal_desc,
 	&ikev1_exchange_names,
-	&exchange_names_ikev1orv2,
+	&isakmp_xchg_type_names,
 	&ikev1_protocol_names,
 	&isakmp_transformid_names,
 	&ah_transformid_names,
 	&esp_transformid_names,
-	&ipcomp_transformid_names,
+	&ipsec_ipcomp_algo_names,
 	&ikev1_ike_id_type_names,
 	&ikev2_ike_id_type_names,
 	&ike_cert_type_names,
@@ -2647,6 +2653,7 @@ static const enum_names *en_checklist[] = {
 	&payload_flag_names,
 	&oakley_attr_bit_names,
 	&global_timer_names,
+	&policy_spi_names,
 };
 
 void check_enum_names(enum_names *checklist[], size_t tl)

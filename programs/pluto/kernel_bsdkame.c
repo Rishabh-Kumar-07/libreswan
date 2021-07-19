@@ -270,16 +270,15 @@ static void bsdkame_consume_pfkey(int pfkeyfd, unsigned int pfkey_seq)
  *
  */
 static bool bsdkame_raw_policy(enum kernel_policy_op sadb_op,
-			       const ip_address *this_host,
-			       const ip_selector *this_client,
-			       const ip_address *that_host,
-			       const ip_selector *that_client,
+			       const ip_address *src_host,
+			       const ip_selector *src_client,
+			       const ip_address *dst_host,
+			       const ip_selector *dst_client,
 			       ipsec_spi_t cur_spi UNUSED,
 			       ipsec_spi_t new_spi,
-			       const struct ip_protocol *sa_proto,
 			       unsigned int transport_proto,
 			       enum eroute_type esatype UNUSED,
-			       const struct pfkey_proto_info *proto_info,
+			       const struct kernel_encap *encap,
 			       deltatime_t use_lifetime UNUSED,
 			       uint32_t sa_priority UNUSED,
 			       const struct sa_marks *sa_marks UNUSED,
@@ -287,8 +286,8 @@ static bool bsdkame_raw_policy(enum kernel_policy_op sadb_op,
 			       const shunk_t policy_label UNUSED,
 			       struct logger *logger)
 {
-	ip_sockaddr saddr = sockaddr_from_address(selector_prefix(*this_client));
-	ip_sockaddr daddr = sockaddr_from_address(selector_prefix(*that_client));
+	ip_sockaddr saddr = sockaddr_from_address(selector_prefix(*src_client));
+	ip_sockaddr daddr = sockaddr_from_address(selector_prefix(*dst_client));
 	char pbuf[512];
 	struct sadb_x_policy *policy_struct = (struct sadb_x_policy *)pbuf;
 	struct sadb_x_ipsecrequest *ir;
@@ -330,10 +329,11 @@ static bool bsdkame_raw_policy(enum kernel_policy_op sadb_op,
 			break;
 		case SPI_TRAP:
 			if (sadb_op == KP_ADD_INBOUND ||
-				sadb_op == KP_DEL_INBOUND)
+				sadb_op == KP_DELETE_INBOUND)
 				return TRUE;
 
 			break;
+		case SPI_IGNORE:
 		case SPI_TRAPSUBNET: /* unused in our code */
 		default:
 			bad_case(ntohl(new_spi));
@@ -344,16 +344,17 @@ static bool bsdkame_raw_policy(enum kernel_policy_op sadb_op,
 		bad_case(esatype);
 	}
 
-	const int dir = ((sadb_op == KP_ADD_INBOUND || sadb_op == KP_DEL_INBOUND) ?
+	const int dir = ((sadb_op == KP_ADD_INBOUND || sadb_op == KP_DELETE_INBOUND) ?
 			 IPSEC_DIR_INBOUND : IPSEC_DIR_OUTBOUND);
 
 	/*
 	 * XXX: Hack: don't install an inbound spdb entry when tunnel
 	 * mode?
 	 */
-	if (dir == IPSEC_DIR_INBOUND && sa_proto != &ip_protocol_ipip) {
-		dbg("%s() ignoring inbound non-tunnel %s eroute entry", __func__,
-			sa_proto->name);
+	if (dir == IPSEC_DIR_INBOUND &&
+	    encap != NULL && encap->mode == ENCAP_MODE_TRANSPORT) {
+		dbg("%s() ignoring inbound non-tunnel %d eroute entry",
+		    __func__, esatype);
 		return true;
 	}
 
@@ -368,22 +369,19 @@ static bool bsdkame_raw_policy(enum kernel_policy_op sadb_op,
 
 	policylen = sizeof(*policy_struct);
 
-	if (policy == IPSEC_POLICY_IPSEC) {
-		ip_sockaddr local_sa = sockaddr_from_address(*this_host);
-		ip_sockaddr remote_sa = sockaddr_from_address(*that_host);
+	if (policy == IPSEC_POLICY_IPSEC && encap != NULL) {
+		ip_sockaddr local_sa = sockaddr_from_address(*src_host);
+		ip_sockaddr remote_sa = sockaddr_from_address(*dst_host);
 
 		ir = (struct sadb_x_ipsecrequest *)&policy_struct[1];
 
 		ir->sadb_x_ipsecrequest_len = (sizeof(struct sadb_x_ipsecrequest) +
 					       local_sa.len + remote_sa.len);
-		dbg("%s() sa_proto is %d %s", __func__, sa_proto->ipproto, sa_proto->name);
-		if (sa_proto->ipproto == ET_IPIP) {
-			ir->sadb_x_ipsecrequest_mode = IPSEC_MODE_TUNNEL;
-			ir->sadb_x_ipsecrequest_proto = proto_info != NULL ? (unsigned)proto_info->proto : sa_proto->ipproto;
-		} else {
-			ir->sadb_x_ipsecrequest_mode = IPSEC_MODE_TRANSPORT;
-			ir->sadb_x_ipsecrequest_proto = sa_proto->ipproto;
-		}
+		/*pexpect(encap != NULL)?*/
+		ir->sadb_x_ipsecrequest_mode = (encap->mode == ENCAP_MODE_TUNNEL ? IPSEC_MODE_TUNNEL :
+						encap->mode == ENCAP_MODE_TRANSPORT ? IPSEC_MODE_TRANSPORT :
+						0);
+		ir->sadb_x_ipsecrequest_proto = encap->rule[0].proto;
 		dbg("%s() sadb mode %d proto %d",
 		    __func__, ir->sadb_x_ipsecrequest_mode, ir->sadb_x_ipsecrequest_proto);
 		ir->sadb_x_ipsecrequest_level = IPSEC_LEVEL_REQUIRE;
@@ -409,8 +407,8 @@ static bool bsdkame_raw_policy(enum kernel_policy_op sadb_op,
 
 	dbg("calling pfkey_send_spdadd() from %s", __func__);
 	ret = pfkey_send_spdadd(pfkeyfd,
-				&saddr.sa.sa, this_client->maskbits,
-				&daddr.sa.sa, that_client->maskbits,
+				&saddr.sa.sa, src_client->maskbits,
+				&daddr.sa.sa, dst_client->maskbits,
 				transport_proto ? transport_proto : 255 /* proto */,
 				(caddr_t)policy_struct, policylen,
 				pfkey_seq);
@@ -423,8 +421,8 @@ static bool bsdkame_raw_policy(enum kernel_policy_op sadb_op,
 		llog(RC_LOG, logger,
 		     "ret = %d from send_spdadd: %s addr=%s/%s seq=%u opname=eroute", ret,
 		     ipsec_strerror(),
-		     str_selector(this_client, &s),
-		     str_selector(that_client, &d),
+		     str_selector(src_client, &s),
+		     str_selector(dst_client, &d),
 		     pfkey_seq);
 		return false;
 	}
@@ -453,23 +451,23 @@ static bool bsdkame_shunt_policy(enum kernel_policy_op op,
 	case 0:
 		/* we're supposed to end up with no eroute: rejig op and opname */
 		switch (op) {
-		case KP_REPLACE:
+		case KP_REPLACE_OUTBOUND:
 			/* replace with nothing == delete */
-			op = KP_DELETE;
+			op = KP_DELETE_OUTBOUND;
 			opname = "delete";
 			break;
-		case KP_ADD:
+		case KP_ADD_OUTBOUND:
 			/* add nothing == do nothing */
 			return TRUE;
 
-		case KP_DELETE:
+		case KP_DELETE_OUTBOUND:
 			/* delete remains delete */
 			break;
 
 		case KP_ADD_INBOUND:
 			break;
 
-		case KP_DEL_INBOUND:
+		case KP_DELETE_INBOUND:
 			break;
 
 		default:
@@ -500,30 +498,30 @@ static bool bsdkame_shunt_policy(enum kernel_policy_op op,
 		 */
 		passert(eclipsable(sr));
 		switch (op) {
-		case KP_REPLACE:
+		case KP_REPLACE_OUTBOUND:
 			/* really an add */
-			op = KP_ADD;
+			op = KP_ADD_OUTBOUND;
 			opname = "replace eclipsed";
 			eclipse_count--;
 			break;
 
-		case KP_DELETE:
+		case KP_DELETE_OUTBOUND:
 			/* delete unnecessary: we don't actually have an eroute */
 			eclipse_count--;
 			return TRUE;
 
-		case KP_ADD:
+		case KP_ADD_OUTBOUND:
 		default:
 			bad_case(op);
 		}
-	} else if (eclipse_count > 0 && op == KP_DELETE && eclipsable(sr)) {
+	} else if (eclipse_count > 0 && op == KP_DELETE_OUTBOUND && eclipsable(sr)) {
 		/* maybe we are uneclipsing something */
 		struct spd_route *esr;
 		const struct connection *ue = eclipsed(c, &esr);
 
 		if (ue != NULL) {
 			esr->routing = RT_ROUTED_PROSPECTIVE;
-			return bsdkame_shunt_policy(KP_REPLACE,
+			return bsdkame_shunt_policy(KP_REPLACE_OUTBOUND,
 						    ue, esr,
 						    RT_ROUTED_PROSPECTIVE,
 						    "restoring eclipsed",
@@ -532,8 +530,8 @@ static bool bsdkame_shunt_policy(enum kernel_policy_op op,
 	}
 
 	switch (op) {
-	case KP_REPLACE:
-	case KP_ADD:
+	case KP_REPLACE_OUTBOUND:
+	case KP_ADD_OUTBOUND:
 	{
 		const ip_selector mine = sr->this.client;
 		const ip_selector peers = sr->that.client;
@@ -628,7 +626,7 @@ static bool bsdkame_shunt_policy(enum kernel_policy_op op,
 		return TRUE;
 	}
 
-	case KP_DELETE:
+	case KP_DELETE_OUTBOUND:
 	{
 		/* need to send a delete message */
 		const ip_selector mine = sr->this.client;
@@ -687,7 +685,7 @@ static bool bsdkame_shunt_policy(enum kernel_policy_op op,
 	}
 	case KP_ADD_INBOUND:
 	case KP_REPLACE_INBOUND:
-	case KP_DEL_INBOUND:
+	case KP_DELETE_INBOUND:
 		bad_case(op);
 	}
 	return FALSE;
@@ -699,13 +697,12 @@ static bool bsdkame_add_sa(const struct kernel_sa *sa, bool replace,
 	ip_sockaddr saddr = sockaddr_from_address(*sa->src.address);
 	ip_sockaddr daddr = sockaddr_from_address(*sa->dst.address);
 	char keymat[256];
-	int ret, mode, satype;
+	int ret;
 
-	if (sa->mode == ENCAPSULATION_MODE_TUNNEL)
-		mode = IPSEC_MODE_TUNNEL;
-	else
-		mode = IPSEC_MODE_TRANSPORT;
+	/* only the inner-most SA gets the tunnel flag */
+	int mode = (sa->tunnel && sa->level == 0 ? IPSEC_MODE_TUNNEL : IPSEC_MODE_TRANSPORT);
 
+	int satype;
 	switch (sa->esatype) {
 	case ET_AH:
 		satype = SADB_SATYPE_AH;

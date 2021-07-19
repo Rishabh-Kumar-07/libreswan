@@ -49,7 +49,6 @@
 
 #include "sysdep.h"
 #include "constants.h"
-#include "lsw-pfkeyv2.h"	/* for SADB_X_CALG_DEFLATE et.al., grrr */
 
 #include "defs.h"
 #include "rnd.h"
@@ -58,6 +57,7 @@
 #include "state.h"
 #include "timer.h"
 #include "kernel.h"
+#include "kernel_ops.h"
 #include "kernel_xfrm.h"
 #include "packet.h"
 #include "x509.h"
@@ -89,6 +89,18 @@ static bool route_and_eroute(struct connection *c,
 			     /* st or c */
 			     struct logger *logger);
 
+extern bool eroute_connection(const struct spd_route *sr,
+			      ipsec_spi_t cur_spi,
+			      ipsec_spi_t new_spi,
+			      const struct kernel_route *route,
+			      enum eroute_type esatype,
+			      const struct kernel_encap *encap,
+			      uint32_t sa_priority,
+			      const struct sa_marks *sa_marks,
+			      const uint32_t xfrm_if_id,
+			      unsigned int op, const char *opname,
+			      struct logger *logger);
+
 bool can_do_IPcomp = true;  /* can system actually perform IPCOMP? */
 
 static global_timer_cb kernel_scan_shunts;
@@ -103,17 +115,14 @@ static bool invoke_command(const char *verb, const char *verb_suffix,
 	((c)->interface->ip_dev == (d)->interface->ip_dev && \
 	 sameaddr(&(c)->spd.this.host_nexthop, &(d)->spd.this.host_nexthop))
 
-const struct pfkey_proto_info esp_transport_proto_info[2] = {
-	{
-		.proto = IPPROTO_ESP,
-		.mode = ENCAPSULATION_MODE_TRANSPORT,
+const struct kernel_encap esp_transport_kernel_encap = {
+	.outer = 0,
+	.inner_proto = &ip_protocol_esp,
+	.mode = ENCAP_MODE_TRANSPORT,
+	.rule[0] = {
+		.proto = ENCAP_PROTO_ESP,
 		.reqid = 0
 	},
-	{
-		.proto = 0,
-		.mode = 0,
-		.reqid = 0
-	}
 };
 
 struct bare_shunt {
@@ -201,8 +210,9 @@ void add_bare_shunt(const ip_selector *our_client,
 	bs->transport_proto = transport_proto;
 	bs->policy_prio = BOTTOM_PRIO;
 
-	bs->said = said3(&selector_type(our_client)->address.any,
-			 htonl(shunt_spi), &ip_protocol_internal);
+	bs->said = said_from_address_protocol_spi(selector_type(our_client)->address.any,
+						  &ip_protocol_internal,
+						  htonl(shunt_spi));
 	bs->count = 0;
 	bs->last_activity = mononow();
 
@@ -229,6 +239,15 @@ static reqid_t get_proto_reqid(reqid_t base, const struct ip_protocol *proto)
 		return reqid_ah(base);
 
 	PASSERT_FAIL("bad protocol %s", proto->name);
+}
+
+static const char *said_str(const ip_address dst,
+			    const struct ip_protocol *sa_proto,
+			    ipsec_spi_t spi,
+			    said_buf *buf)
+{
+	ip_said said = said_from_address_protocol_spi(dst, sa_proto, spi);
+	return str_said(&said, buf);
 }
 
 /* Generate Unique SPI numbers.
@@ -262,13 +281,13 @@ ipsec_spi_t get_ipsec_spi(ipsec_spi_t avoid,
 
 	ipsec_spi_t network_spi;
 	if (kernel_ops->get_spi != NULL) {
-		char text_said[SATOT_BUF];
-		set_text_said(text_said, &sr->this.host_addr, 0, proto);
+		said_buf sb;
 		network_spi = kernel_ops->get_spi(&sr->that.host_addr,
 						  &sr->this.host_addr, proto, tunnel,
 						  get_proto_reqid(sr->reqid, proto),
 						  IPSEC_DOI_SPI_OUR_MIN, 0xffffffffU,
-						  text_said, logger);
+						  said_str(sr->this.host_addr, proto, 0, &sb),
+						  logger);
 	} else {
 		static ipsec_spi_t host_spi; /* host order, so not returned directly! */
 		do {
@@ -277,11 +296,11 @@ ipsec_spi_t get_ipsec_spi(ipsec_spi_t avoid,
 		} while (host_spi < IPSEC_DOI_SPI_OUR_MIN || network_spi == avoid);
 	}
 
-	char text_said[SATOT_BUF];
-	set_text_said(text_said, &sr->this.host_addr, network_spi, proto);
+	said_buf sb;
 	address_buf rb;
 	dbg("kernel: allocated incoming spi %s -> %s%s",
-	    str_address(&sr->that.host_addr, &rb), text_said,
+	    str_address(&sr->that.host_addr, &rb),
+	    said_str(sr->this.host_addr, proto, network_spi, &sb),
 	    tunnel ? " in tunnel-mode" : "");
 	return network_spi;
 }
@@ -298,15 +317,15 @@ ipsec_spi_t get_my_cpi(const struct spd_route *sr, bool tunnel,
 		       struct logger *logger)
 {
 	if (kernel_ops->get_spi != NULL) {
-		char text_said[SATOT_BUF];
-		set_text_said(text_said, &sr->this.host_addr, 0, &ip_protocol_comp);
+		said_buf sb;
 		return kernel_ops->get_spi(&sr->that.host_addr,
 					   &sr->this.host_addr, &ip_protocol_comp,
 					   tunnel,
 					   get_proto_reqid(sr->reqid, &ip_protocol_comp),
 					   IPCOMP_FIRST_NEGOTIATED,
 					   IPCOMP_LAST_NEGOTIATED,
-					   text_said, logger);
+					   said_str(sr->this.host_addr, &ip_protocol_comp, 0, &sb),
+					   logger);
 	} else {
 		static cpi_t first_busy_cpi = 0;
 		static cpi_t latest_cpi = 0;
@@ -801,6 +820,146 @@ bool invoke_command(const char *verb, const char *verb_suffix, const char *cmd,
 }
 
 /*
+ * Build an array of encapsulation rules/tmpl.  Order things
+ * inner-most to outer-most so the last entry is what will go across
+ * the wire.  A -1 entry of the packet to be encapsulated is implied.
+ */
+
+static struct kernel_encap kernel_encap_from_spd(lset_t policy,
+						 const struct spd_route *spd,
+						 enum encap_mode mode)
+{
+	struct kernel_encap encap = {
+		.mode = mode,
+	};
+
+	/*
+	 * XXX: remember construct this inner-to-outer; which is the
+	 * same as the kernel_sa array.
+	 */
+
+	struct encap_rule *outer = encap.rule - 1;
+	if (policy & POLICY_COMPRESS) {
+		outer++;
+		outer->reqid = reqid_ipcomp(spd->reqid);
+		outer->proto = ENCAP_PROTO_IPCOMP;
+	}
+	if (policy & POLICY_ENCRYPT) {
+		outer++;
+		outer->reqid = reqid_esp(spd->reqid);
+		outer->proto = ENCAP_PROTO_ESP;
+	}
+	if (policy & POLICY_AUTHENTICATE) {
+		outer++;
+		outer->reqid = reqid_ah(spd->reqid);
+		outer->proto = ENCAP_PROTO_AH;
+	}
+
+	passert(outer < encap.rule + elemsof(encap.rule));
+	encap.outer = outer - encap.rule; /* could be -1 */
+	passert(encap.outer < (int)elemsof(encap.rule));
+
+	/*
+	 * XXX: Inner here refers to the inner-most rule which, for a
+	 * tunnel, needs the tunnel bit set.  For transport, why it
+	 * uses outer remains a mystery (suspect it just needs to be
+	 * !INT !IPIP).
+	 */
+	if (outer >= encap.rule) {
+		encap.inner_proto = (mode == ENCAP_MODE_TUNNEL ? &ip_protocol_ipip :
+				     mode == ENCAP_MODE_TRANSPORT ? protocol_by_ipproto(outer->proto) :
+				     NULL);
+		pexpect(encap.inner_proto != NULL);
+	}
+
+	return encap;
+}
+
+static struct kernel_encap kernel_encap_from_state(const struct state *st,
+						   const struct spd_route *spd)
+{
+	bool tunnel = false;
+	lset_t policy = LEMPTY;
+	if (st->st_ipcomp.present) {
+		policy |= POLICY_COMPRESS;
+		tunnel |= (st->st_ipcomp.attrs.mode == ENCAPSULATION_MODE_TUNNEL);
+	}
+
+	if (st->st_esp.present) {
+		policy |= POLICY_ENCRYPT;
+		tunnel |= (st->st_esp.attrs.mode == ENCAPSULATION_MODE_TUNNEL);
+	}
+
+	if (st->st_ah.present) {
+		policy |= POLICY_AUTHENTICATE;
+		tunnel |= (st->st_ah.attrs.mode == ENCAPSULATION_MODE_TUNNEL);
+	}
+
+	enum encap_mode mode = (tunnel ? ENCAP_MODE_TUNNEL : ENCAP_MODE_TRANSPORT);
+	struct kernel_encap encap = kernel_encap_from_spd(policy, spd, mode);
+	return encap;
+}
+
+static struct kernel_route kernel_route_from_spd(const struct spd_route *spd,
+						 enum encap_mode mode,
+						 enum encap_direction flow)
+{
+	/*
+	 * With pfkey and transport mode with nat-traversal we need to
+	 * change the remote IPsec SA to point to external ip of the
+	 * peer.  Here we substitute real client ip with NATD ip.
+	 *
+	 * Bug #1004 fix.
+	 *
+	 * There really isn't "client" with XFRM and transport mode so
+	 * eroute must be done to natted, visible ip. If we don't hide
+	 * internal IP, communication doesn't work.
+	 */
+	ip_selector remote_client;
+	switch (mode) {
+	case ENCAP_MODE_TUNNEL:
+		remote_client = spd->that.client;
+		break;
+	case ENCAP_MODE_TRANSPORT:
+		remote_client = selector_from_address_protocol_port(spd->that.host_addr,
+								    protocol_by_ipproto(spd->that.protocol),
+								    selector_port(spd->that.client));
+		break;
+	default:
+		bad_case(mode);
+	}
+	selector_buf os, ns;
+	dbg("%s() changing remote selector %s to %s",
+	    __func__,
+	    str_selector(&spd->that.client, &os),
+	    str_selector(&remote_client, &ns));
+
+	struct kernel_route route = {0};
+	struct route_end *local;
+	struct route_end *remote;
+
+	switch (flow) {
+	case ENCAP_DIRECTION_INBOUND:
+		remote = &route.src;
+		local = &route.dst;
+		break;
+	case ENCAP_DIRECTION_OUTBOUND:
+		local = &route.src;
+		remote = &route.dst;
+		break;
+	default:
+		bad_case(flow);
+	}
+
+	local->client = spd->this.client;
+	remote->client = remote_client;
+	local->host_addr = spd->this.host_addr;
+	remote->host_addr = spd->that.host_addr;
+
+	return route;
+}
+
+/*
  * handle co-terminal attempt of the "near" kind
  *
  * Note: it mutates both inside and outside
@@ -1072,89 +1231,28 @@ static bool sag_eroute(const struct state *st,
 		       const char *opname)
 {
 	struct connection *c = st->st_connection;
-	enum eroute_type inner_esatype;
-	ipsec_spi_t inner_spi;
-	struct pfkey_proto_info proto_info[4];
-	int i;
-	bool tunnel;
 
 	/*
-	 * figure out the SPI and protocol (in two forms)
-	 * for the innermost transformation.
+	 * Figure out the SPI and protocol (in two forms) for the
+	 * outer transformation.
 	 */
-	i = elemsof(proto_info) - 1;
-	proto_info[i].proto = 0;
-	tunnel = FALSE;
 
-	const struct ip_protocol *inner_proto = NULL;
-	inner_esatype = ET_UNSPEC;
-	inner_spi = 0;
-
-	if (st->st_ah.present) {
-		inner_spi = st->st_ah.attrs.spi;
-		inner_proto = &ip_protocol_ah;
-		inner_esatype = ET_AH;
-
-		i--;
-		proto_info[i].proto = IPPROTO_AH;
-		proto_info[i].mode = st->st_ah.attrs.mode;
-		tunnel |= proto_info[i].mode ==
-			ENCAPSULATION_MODE_TUNNEL;
-		proto_info[i].reqid = reqid_ah(sr->reqid);
-	}
-
-	if (st->st_esp.present) {
-		inner_spi = st->st_esp.attrs.spi;
-		inner_proto = &ip_protocol_esp;
-		inner_esatype = ET_ESP;
-
-		i--;
-		proto_info[i].proto = IPPROTO_ESP;
-		proto_info[i].mode = st->st_esp.attrs.mode;
-		tunnel |= proto_info[i].mode ==
-			ENCAPSULATION_MODE_TUNNEL;
-		proto_info[i].reqid = reqid_esp(sr->reqid);
-	}
-
-	if (st->st_ipcomp.present) {
-		inner_spi = st->st_ipcomp.attrs.spi;
-		inner_proto = &ip_protocol_comp;
-		inner_esatype = ET_IPCOMP;
-
-		i--;
-		proto_info[i].proto = IPPROTO_COMP;
-		proto_info[i].mode =
-			st->st_ipcomp.attrs.mode;
-		tunnel |= proto_info[i].mode ==
-			ENCAPSULATION_MODE_TUNNEL;
-		proto_info[i].reqid = reqid_ipcomp(sr->reqid);
-	}
-
+	const struct kernel_encap encap = kernel_encap_from_state(st, sr);
 	/* check for no transform at all */
-	passert(st->st_ipcomp.present || st->st_esp.present ||
-			st->st_ah.present);
-
-	if (tunnel) {
-		int j;
-
-		inner_spi = st->st_tunnel_out_spi;
-		inner_proto = &ip_protocol_ipip;
-		inner_esatype = ET_IPIP;
-
-		proto_info[i].mode = ENCAPSULATION_MODE_TUNNEL;
-		for (j = i + 1; proto_info[j].proto; j++)
-			proto_info[j].mode =
-				ENCAPSULATION_MODE_TRANSPORT;
-	}
+	passert(encap.outer >= 0);
 
 	uint32_t xfrm_if_id = c->xfrmi != NULL ?  c->xfrmi->if_id : 0;
+
+	pexpect((op & KERNEL_POLICY_DIR_MASK) == KERNEL_POLICY_DIR_OUT);
+	struct kernel_route route = kernel_route_from_spd(sr, encap.mode,
+							  ENCAP_DIRECTION_OUTBOUND);
 
 	/* hack */
 	char why[256];
 	snprintf(why, sizeof(why), "%s() %s", __func__, opname);
 
-	return eroute_connection(sr, inner_spi, inner_spi, inner_proto,
-				 inner_esatype, proto_info + i,
+	return eroute_connection(sr, ntohl(SPI_IGNORE), ntohl(SPI_IGNORE),
+				 &route, encap.inner_proto->ipproto, &encap,
 				 calculate_sa_prio(c, FALSE), &c->sa_marks,
 				 xfrm_if_id, op, why, st->st_logger);
 }
@@ -1224,14 +1322,6 @@ void unroute_connection(struct connection *c)
 }
 
 #include "kernel_alg.h"
-
-void set_text_said(char *text_said, const ip_address *dst,
-			ipsec_spi_t spi, const struct ip_protocol *sa_proto)
-{
-	ip_said said = said3(dst, spi, sa_proto);
-	struct jambuf jam = array_as_jambuf(text_said, SATOT_BUF);
-	jam_said(&jam, &said);
-}
 
 /* find an entry in the bare_shunt table.
  * Trick: return a pointer to the pointer to the entry;
@@ -1312,164 +1402,6 @@ void show_shunt_status(struct show *s)
 			     str_policy_prio(bs->policy_prio, &prio),
 			     bs->why);
 	}
-}
-
-/* Setup an IPsec route entry.
- * op is one of the KP_* operators.
- */
-
-bool raw_policy(enum kernel_policy_op op,
-		const ip_address *this_host,
-		const ip_selector *this_client,
-		const ip_address *that_host,
-		const ip_selector *that_client,
-		ipsec_spi_t cur_spi,
-		ipsec_spi_t new_spi,
-		const struct ip_protocol *sa_proto,
-		unsigned int transport_proto,
-		enum eroute_type esatype,
-		const struct pfkey_proto_info *proto_info,
-		deltatime_t use_lifetime,
-		uint32_t sa_priority,
-		const struct sa_marks *sa_marks,
-		const uint32_t xfrm_if_id,
-		const shunk_t sec_label,
-		struct logger *logger,
-		const char *fmt, ...)
-{
-	LSWDBGP(DBG_BASE, buf) {
-		jam(buf, "kernel: %s() ", __func__);
-		jam_enum_short(buf, &kernel_policy_op_names, op);
-
-		jam(buf, " ");
-		va_list ap;
-		va_start(ap, fmt);
-		jam_va_list(buf, fmt, ap);
-		va_end(ap);
-
-		jam(buf, " ");
-		jam_selector(buf, this_client);
-		jam(buf, "-%s-", selector_protocol(*this_client)->name);
-		jam_address(buf, this_host);
-		jam(buf, "==");
-		jam_address(buf, that_host);
-		jam(buf, "-%s-", selector_protocol(*that_client)->name);
-		jam_selector(buf, that_client);
-
-		/*
-		 * Dump the {old,new}_spi.
-		 *
-		 * XXX: this needs to deal with a bug.
-		 *
-		 * At this point the {cur,new}_spi contains either the
-		 * Child SPI in network order, or the enum policy_spi
-		 * converted to network order (at other points in the
-		 * code the SPI is passed in _host_ order, UGH!).
-		 *
-		 * Except some code is forgetting to do the network
-		 * conversion (mumble something about making it hunk
-		 * like to enforce the byte order).
-		 */
-		const char *spin = " ";
-		FOR_EACH_THING(nspi, cur_spi, new_spi) {
-			const char *name = NULL;
-			const char *prefix = "";
-			/*
-			 * The NSPI converted back to host order
-			 * should work; but if it doesn't ...
-			 */
-			FOR_EACH_THING(spi, ntohl(nspi), nspi) {
-				switch ((enum policy_spi)spi) {
-#define C(E) case SPI_##E: name = #E; break;
-					C(PASS);
-					C(DROP);
-					C(REJECT);
-					C(HOLD);
-					C(TRAP);
-					C(TRAPSUBNET);
-#undef C
-				}
-				if (name != NULL) {
-					break;
-				}
-				prefix = "htonl.";
-			}
-			jam(buf, "%s%%", spin);
-			if (name == NULL) {
-				jam(buf, "0x%08x", nspi);
-			} else {
-				jam(buf, "%s%s", prefix, name);
-			}
-			spin = "->";
-		}
-
-		jam(buf, " sa_proto=%s", sa_proto == NULL ? "<unset>" : sa_proto->name);
-		jam(buf, " transport_proto=%s", protocol_by_ipproto(transport_proto)->name);
-		jam(buf, " esatype=%s", protocol_by_ipproto(esatype)->name);
-
-		jam(buf, " proto_info={");
-		for (unsigned i = 0; proto_info[i].proto; i++) {
-			const struct pfkey_proto_info *pi = &proto_info[i];
-			if (i > 0) {
-				jam(buf, ",");
-			}
-			jam(buf, "%s/", protocol_by_ipproto(pi->proto)->name);
-			jam_enum_short(buf, &encapsulation_mode_names, pi->mode);
-			jam(buf, "/%d", pi->reqid);
-		}
-		jam(buf, "}");
-
-		jam(buf, " lifetime=");
-		jam_deltatime(buf, use_lifetime);
-		jam(buf, "s");
-
-		jam(buf, " priority=%d", sa_priority);
-
-		if (sa_marks != NULL) {
-			jam(buf, " sa_marks=");
-			const char *dir = "o:";
-			FOR_EACH_THING(mark, &sa_marks->out, &sa_marks->in) {
-				jam(buf, "%s%x/%x%s",
-				    dir, mark->val, mark->mask,
-				    mark->unique ? "/unique" : "");
-				dir = ",i:";
-			}
-		}
-
-		jam(buf, " xfrm_if_id=%d", xfrm_if_id);
-
-		jam(buf, " seclabel=");
-		jam_sanitized_hunk(buf, sec_label);
-	}
-
-	if (esatype == ET_INT) {
-		switch(ntohl(new_spi)) {
-		case SPI_HOLD:
-			dbg("kernel: %s() SPI_HOLD implemented as no-op", __func__);
-			return true;
-		case SPI_TRAP:
-			if (op == KP_ADD_INBOUND ||
-			    op == KP_DELETE_INBOUND) {
-				dbg("kernel: %s() SPI_TRAP inbound implemented as no-op", __func__);
-				return true;
-			}
-			break;
-		}
-	}
-
-	bool result = kernel_ops->raw_policy(op,
-					     this_host, this_client,
-					     that_host, that_client,
-					     cur_spi, new_spi, sa_proto,
-					     transport_proto,
-					     esatype, proto_info,
-					     use_lifetime, sa_priority, sa_marks,
-					     xfrm_if_id,
-					     sec_label,
-					     logger);
-	dbg("kernel: policy: result=%s", result ? "success" : "failed");
-
-	return result;
 }
 
 /*
@@ -1553,7 +1485,6 @@ bool delete_bare_shunt(const ip_address *src_address,
 		ok = raw_policy(KP_DELETE_OUTBOUND,
 				&null_host, &src, &null_host, &dst,
 				htonl(cur_shunt_spi), htonl(SPI_PASS),
-				&ip_protocol_internal,
 				transport_proto,
 				ET_INT, esp_transport_proto_info,
 				deltatime(SHUNT_PATIENCE),
@@ -1602,59 +1533,24 @@ bool install_se_connection_policies(struct connection *c, struct logger *logger)
 	    pri_connection(c, &cb),
 	    enum_name(&routing_story, c->spd.routing));
 
-	if (!pexpect(c->spd.this.sec_label.len > 0)) {
+	if (!pexpect(c->ike_version == IKEv2 && c->spd.this.sec_label.len > 0) ||
+	    !pexpect(c->kind == CK_TEMPLATE)) {
 		return false;
 	}
-
-#if 0
-	/*
-	 * XXX: given a template connection with an installed policy;
-	 * the acquire will instantiate the template and attach that
-	 * to the IKE SA; it should have probably attached the
-	 * template and then later instantiated the child.
-	 */
-	if (!pexpect(c->kind == CK_TEMPLATE)) {
-		return false;
-	}
-#endif
 
 	if (c->spd.routing != RT_UNROUTED) {
 		dbg("kernel: %s() connection already routed", __func__);
 		return true;
 	}
 
-	struct pfkey_proto_info proto_infos[4] = {0};
-	const struct ip_protocol *inner_proto = NULL;
-	enum eroute_type inner_esatype = ET_UNSPEC;
-	enum encapsulation_mode mode = (c->policy & POLICY_TUNNEL ? ENCAPSULATION_MODE_TUNNEL :
-					ENCAPSULATION_MODE_TRANSPORT);
-	uint32_t priority = calculate_sa_prio(c, /*oe_shunt*/false);
+	enum encap_mode mode = (c->policy & POLICY_TUNNEL) ? ENCAP_MODE_TUNNEL : ENCAP_MODE_TRANSPORT;
+	const struct kernel_encap encap = kernel_encap_from_spd(c->policy, &c->spd, mode);
+	if (encap.outer < 0) {
+		/* XXX: log? */
+		return false;
+	}
 
-	struct pfkey_proto_info *proto_info = &proto_infos[elemsof(proto_infos) - 1];
-	if (c->policy & POLICY_AUTHENTICATE) {
-		inner_proto = &ip_protocol_ah;
-		inner_esatype = ET_AH;
-		proto_info--;
-		proto_info->reqid = reqid_ah(c->spd.reqid);
-		proto_info->proto = IPPROTO_AH;
-		proto_info->mode = mode;
-	}
-	if (c->policy & POLICY_ENCRYPT) {
-		inner_proto = &ip_protocol_esp;
-		inner_esatype = ET_ESP;
-		proto_info--;
-		proto_info->reqid = reqid_esp(c->spd.reqid);
-		proto_info->proto = IPPROTO_ESP;
-		proto_info->mode = mode;
-	}
-	if (c->policy & POLICY_COMPRESS) {
-		inner_proto = &ip_protocol_comp;
-		inner_esatype = ET_IPCOMP;
-		proto_info--;
-		proto_info->reqid = reqid_ipcomp(c->spd.reqid);
-		proto_info->proto = IPPROTO_COMP;
-		proto_info->mode = mode;
-	}
+	uint32_t priority = calculate_sa_prio(c, /*oe_shunt*/false);
 
 	/*
 	 * SE installs both an outgoing and incoming policy.  Normal
@@ -1668,10 +1564,9 @@ bool install_se_connection_policies(struct connection *c, struct logger *logger)
 				/*src*/&src->host_addr, &src->client,
 				/*dst*/&dst->host_addr, &dst->client,
 				/*ignored?old/new*/htonl(SPI_PASS), ntohl(SPI_PASS),
-				/*sa_proto*/inner_proto,
 				/*transport_proto*/c->spd.this.protocol,
-				/*esatype*/inner_esatype,
-				/*proto_info*/proto_info,
+				/*esatype*/encap.inner_proto->ipproto,
+				/*encap*/&encap,
 				/*use_lifetime*/deltatime(0),
 				/*sa_priority*/priority,
 				/*sa_marks*/NULL,
@@ -1695,10 +1590,9 @@ bool install_se_connection_policies(struct connection *c, struct logger *logger)
 					   /*src*/&c->spd.this.host_addr, &c->spd.this.client,
 					   /*dst*/&c->spd.that.host_addr, &c->spd.that.client,
 					   /*ignored?old/new*/htonl(SPI_PASS), ntohl(SPI_PASS),
-					   /*sa_proto*/inner_proto,
 					   /*transport_proto*/c->spd.this.protocol,
-					   /*esatype*/inner_esatype,
-					   /*proto_info*/proto_info,
+					   /*esatype*/encap.inner_proto->ipproto,
+					   /*encap*/&encap,
 					   /*use_lifetime*/deltatime(0),
 					   /*sa_priority*/priority,
 					   /*sa_marks*/NULL,
@@ -1732,10 +1626,9 @@ bool install_se_connection_policies(struct connection *c, struct logger *logger)
 				   /*src*/&src->host_addr, &src->client,
 				   /*dst*/&dst->host_addr, &dst->client,
 				   /*ignored?old/new*/htonl(SPI_PASS), ntohl(SPI_PASS),
-				   /*sa_proto*/inner_proto,
 				   /*transport_proto*/c->spd.this.protocol,
-				   /*esatype*/inner_esatype,
-				   /*proto_info*/proto_info,
+				   /*esatype*/encap.inner_proto->ipproto,
+				   /*encap*/&encap,
 				   /*use_lifetime*/deltatime(0),
 				   /*sa_priority*/priority,
 				   /*sa_marks*/NULL,
@@ -1755,32 +1648,26 @@ bool install_se_connection_policies(struct connection *c, struct logger *logger)
 bool eroute_connection(const struct spd_route *sr,
 		       ipsec_spi_t cur_spi,
 		       ipsec_spi_t new_spi,
-		       const struct ip_protocol *sa_proto,
+		       const struct kernel_route *route,
 		       enum eroute_type esatype,
-		       const struct pfkey_proto_info *proto_info,
+		       const struct kernel_encap *encap,
 		       uint32_t sa_priority,
 		       const struct sa_marks *sa_marks,
 		       const uint32_t xfrm_if_id,
-		       unsigned int op,
+		       enum kernel_policy_op op,
 		       const char *opname,
 		       struct logger *logger)
 {
-	ip_address peer = sr->that.host_addr;
-
-	if (sa_proto == &ip_protocol_internal)
-		peer = address_type(&peer)->address.any;
-
 	if (sr->this.has_cat) {
 		ip_selector client = selector_from_address(sr->this.host_addr);
 		bool t = raw_policy(op,
-				    &sr->this.host_addr, &client,
-				    &peer, &sr->that.client,
+				    &route->src.host_addr, &client,
+				    &route->dst.host_addr, &route->dst.client,
 				    cur_spi,
 				    new_spi,
-				    sa_proto,
 				    sr->this.protocol,
 				    esatype,
-				    proto_info,
+				    encap,
 				    deltatime(0),
 				    sa_priority, sa_marks,
 				    xfrm_if_id,
@@ -1795,14 +1682,13 @@ bool eroute_connection(const struct spd_route *sr,
 	}
 
 	return raw_policy(op,
-			  &sr->this.host_addr, &sr->this.client,
-			  &peer, &sr->that.client,
+			  &route->src.host_addr, &route->src.client,
+			  &route->dst.host_addr, &route->dst.client,
 			  cur_spi,
 			  new_spi,
-			  sa_proto,
 			  sr->this.protocol,
 			  esatype,
-			  proto_info,
+			  encap,
 			  deltatime(0),
 			  sa_priority, sa_marks,
 			  xfrm_if_id,
@@ -1883,10 +1769,23 @@ bool assign_holdpass(const struct connection *c,
 				reason = "assign_holdpass() add broad %pass or %hold";
 			}
 
+			pexpect((op & KERNEL_POLICY_DIR_MASK) == KERNEL_POLICY_DIR_OUT);
+			struct kernel_route route = kernel_route_from_spd(sr,
+									  ENCAP_MODE_TRANSPORT,
+									  ENCAP_DIRECTION_OUTBOUND);
+			/*
+			 * XXX: why?
+			 *
+			 * Because only this end is interesting?
+			 * Because it is a shunt and the other end
+			 * doesn't matter?
+			 */
+			route.dst.host_addr = address_type(&route.dst.host_addr)->address.any;
+
 			if (eroute_connection(sr,
 					      htonl(SPI_HOLD), /* kernel induced */
 					      htonl(negotiation_shunt),
-					      &ip_protocol_internal, ET_INT,
+					      &route, ET_INT,
 					      esp_transport_proto_info,
 					      calculate_sa_prio(c, false),
 					      NULL, 0 /* xfrm_if_id */,
@@ -1953,8 +1852,8 @@ bool del_spi(ipsec_spi_t spi, const struct ip_protocol *proto,
 	     const ip_address *src, const ip_address *dst,
 	     struct logger *logger)
 {
-	char text_said[SATOT_BUF];
-	set_text_said(text_said, dst, spi, proto);
+	said_buf sb;
+	const char *text_said = said_str(*dst, proto, spi, &sb);
 
 	address_buf b;
 	dbg("kernel: deleting spi %s -> %s",
@@ -1965,7 +1864,7 @@ bool del_spi(ipsec_spi_t spi, const struct ip_protocol *proto,
 		.proto = proto,
 		.src.address = src,
 		.dst.address = dst,
-		.text_said = text_said,
+		.story = text_said,
 	};
 
 	passert(kernel_ops->del_sa != NULL);
@@ -2003,8 +1902,6 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 	/* Build an inbound or outbound SA */
 
 	struct connection *c = st->st_connection;
-	const struct ip_protocol *proto = NULL;
-	enum eroute_type esatype = ET_UNSPEC;
 	bool replace = inbound && (kernel_ops->get_spi != NULL);
 	bool outgoing_ref_set = false;
 	bool incoming_ref_set = false;
@@ -2016,103 +1913,66 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 	struct kernel_sa said[EM_MAXRELSPIS];
 	struct kernel_sa *said_next = said;
 
-	char text_ipcomp[SATOT_BUF];
-	char text_esp[SATOT_BUF];
-	char text_ah[SATOT_BUF];
-
-	ip_address src, dst;
-	ip_selector src_client, dst_client;
-	if (inbound) {
-		src = c->spd.that.host_addr;
-		src_client = c->spd.that.client;
-		dst = c->spd.this.host_addr;
-		dst_client = c->spd.this.client;
-	} else {
-		src = c->spd.this.host_addr,
-		src_client = c->spd.this.client;
-		dst = c->spd.that.host_addr;
-		dst_client = c->spd.that.client;
-	}
+	/* same scope as said[] */
+	said_buf text_ipcomp;
+	said_buf text_esp;
+	said_buf text_ah;
 
 	/*
-	 * mode: encapsulation mode called for
-	 * encap_oneshot: copy of "encapsulation" but reset to
-	 *	ENCAPSULATION_MODE_TRANSPORT after use.
+	 * Construct the policy encapsulation rules; it determines
+	 * tunnel mode as a side effect.
 	 */
-	int mode = ENCAPSULATION_MODE_TRANSPORT;
-	bool add_selector;
-
-	if (st->st_ah.attrs.mode == ENCAPSULATION_MODE_TUNNEL ||
-	    st->st_esp.attrs.mode == ENCAPSULATION_MODE_TUNNEL ||
-	    st->st_ipcomp.attrs.mode == ENCAPSULATION_MODE_TUNNEL) {
-		mode = ENCAPSULATION_MODE_TUNNEL;
-		add_selector = false; /* Don't add selectors for tunnel mode */
-	} else {
-		/*
-		 * RFC 4301, Section 5.2 Requires traffic selectors to be set
-		 * on transport mode
-		 */
-		add_selector = true;
+	struct kernel_encap encap = kernel_encap_from_state(st, &c->spd);
+	if (!pexpect(encap.outer >= 0)) {
+		return false;
 	}
-	c->ipsec_mode = mode;
 
-	int encap_oneshot = mode;
+	struct kernel_route route = kernel_route_from_spd(&c->spd, encap.mode,
+							  inbound ? ENCAP_DIRECTION_INBOUND : ENCAP_DIRECTION_OUTBOUND);
 
 	const struct kernel_sa said_boilerplate = {
-		.src.address = &src,
-		.dst.address = &dst,
-		.src.client = &src_client,
-		.dst.client = &dst_client,
+		.src.address = &route.src.host_addr,
+		.dst.address = &route.dst.host_addr,
+		.src.client = &route.src.client,
+		.dst.client = &route.dst.client,
 		.inbound = inbound,
-		.add_selector = add_selector,
+		.tunnel = (encap.mode == ENCAP_MODE_TUNNEL),
 		.transport_proto = c->spd.this.protocol,
 		.sa_lifetime = c->sa_ipsec_life_seconds,
 		.outif = -1,
-		.sec_label = (st->st_seen_sec_label.len > 0 ? st->st_seen_sec_label :
-			      st->st_acquired_sec_label.len > 0 ? st->st_acquired_sec_label :
+		.sec_label = (st->st_v1_seen_sec_label.len > 0 ? st->st_v1_seen_sec_label :
+			      st->st_v1_acquired_sec_label.len > 0 ? st->st_v1_acquired_sec_label :
 			      c->spd.this.sec_label /* assume connection outlive their kernel_sa's */),
 	};
 
-	ipsec_spi_t inner_spi = SPI_PASS;
-	if (mode == ENCAPSULATION_MODE_TUNNEL) {
-		/* If we are tunnelling, set up IP in IP pseudo SA */
-		proto = &ip_protocol_ipip;
-		esatype = ET_IPIP;
-	} else {
-		/* For transport mode set ESP */
-		/* ??? why are we sure that this isn't AH? */
-		proto = &ip_protocol_esp;
-		esatype = ET_ESP;
-	}
+	address_buf sab, dab;
+	selector_buf scb, dcb;
+	dbg("kernel: %s() %s %s-%s->[%s=%s=>%s]-%s->%s sec_label="PRI_SHUNK,
+	    __func__,
+	    said_boilerplate.inbound ? "inbound" : "outbound",
+	    str_selector(said_boilerplate.src.client, &scb),
+	    protocol_by_ipproto(said_boilerplate.transport_proto)->name,
+	    str_address(said_boilerplate.src.address, &sab),
+	    encap.inner_proto->name,
+	    str_address(said_boilerplate.dst.address, &dab),
+	    protocol_by_ipproto(said_boilerplate.transport_proto)->name,
+	    str_selector(said_boilerplate.dst.client, &dcb),
+	    pri_shunk(said_boilerplate.sec_label));
 
 	/* set up IPCOMP SA, if any */
 
 	if (st->st_ipcomp.present) {
 		ipsec_spi_t ipcomp_spi =
 			inbound ? st->st_ipcomp.our_spi : st->st_ipcomp.attrs.spi;
-		unsigned compalg;
-
-		switch (st->st_ipcomp.attrs.transattrs.ta_comp) {
-		case IPCOMP_DEFLATE:
-			compalg = SADB_X_CALG_DEFLATE;
-			break;
-
-		default:
-			log_state(RC_LOG_SERIOUS, st,
-				  "IPCOMP transform %s not implemented",
-				  st->st_ipcomp.attrs.transattrs.ta_encrypt->common.fqn);
-			goto fail;
-		}
-
-		set_text_said(text_ipcomp, &dst, ipcomp_spi, &ip_protocol_comp);
-
 		*said_next = said_boilerplate;
 		said_next->spi = ipcomp_spi;
 		said_next->esatype = ET_IPCOMP;
-		said_next->compalg = compalg;
-		said_next->mode = encap_oneshot;
+
+		said_next->ipcomp_algo = st->st_ipcomp.attrs.transattrs.ta_comp;
+		said_next->level = said_next - said;
 		said_next->reqid = reqid_ipcomp(c->spd.reqid);
-		said_next->text_said = text_ipcomp;
+		said_next->story = said_str(route.dst.host_addr, &ip_protocol_comp,
+					    ipcomp_spi, &text_ipcomp);
 
 		if (inbound) {
 			/*
@@ -2126,7 +1986,7 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 			outgoing_ref_set  = true;
 		}
 
-		if (!kernel_ops->add_sa(said_next, replace, st->st_logger)) {
+		if (!kernel_ops_add_sa(said_next, replace, st->st_logger)) {
 			log_state(RC_LOG, st, "add_sa ipcomp failed");
 			goto fail;
 		}
@@ -2146,8 +2006,6 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 			incoming_ref_set = true;
 		}
 		said_next++;
-
-		encap_oneshot = ENCAPSULATION_MODE_TRANSPORT;
 	}
 
 	/* set up ESP SA, if any */
@@ -2242,8 +2100,6 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 
 		passert(st->st_esp.keymat_len == encrypt_keymat_size + integ_keymat_size);
 
-		set_text_said(text_esp, &dst, esp_spi, &ip_protocol_esp);
-
 		*said_next = said_boilerplate;
 		said_next->spi = esp_spi;
 		said_next->esatype = ET_ESP;
@@ -2304,7 +2160,6 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		 * lower-level code to be right.
 		 */
 		said_next->encrypt = ta->ta_encrypt;
-		said_next->compalg = said_next->encrypt->common.id[IKEv1_ESP_ID];
 
 		/* divide up keying material */
 		said_next->enckey = esp_dst_keymat;
@@ -2312,14 +2167,15 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		said_next->authkey = esp_dst_keymat + encrypt_keymat_size;
 		said_next->authkeylen = integ_keymat_size; /* BYTES */
 
-		said_next->mode = encap_oneshot;
+		said_next->level = said_next - said;
 		said_next->reqid = reqid_esp(c->spd.reqid);
 
 		said_next->src.encap_port = encap_sport;
 		said_next->dst.encap_port = encap_dport;
 		said_next->encap_type = encap_type;
 		said_next->natt_oa = &natt_oa;
-		said_next->text_said = text_esp;
+		said_next->story = said_str(route.dst.host_addr, &ip_protocol_esp,
+					    esp_spi, &text_esp);
 
 		if (DBGP(DBG_PRIVATE) || DBGP(DBG_CRYPT)) {
 			DBG_dump("ESP enckey:",  said_next->enckey,
@@ -2341,13 +2197,13 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		}
 		setup_esp_nic_offload(said_next, c, &nic_offload_fallback);
 
-		bool ret = kernel_ops->add_sa(said_next, replace, st->st_logger);
+		bool ret = kernel_ops_add_sa(said_next, replace, st->st_logger);
 
 		if (!ret && nic_offload_fallback &&
 			said_next->nic_offload_dev != NULL) {
 			/* Fallback to non-nic-offload crypto */
 			said_next->nic_offload_dev = NULL;
-			ret = kernel_ops->add_sa(said_next, replace, st->st_logger);
+			ret = kernel_ops_add_sa(said_next, replace, st->st_logger);
 		}
 
 		/* scrub keys from memory */
@@ -2372,8 +2228,6 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 			incoming_ref_set = true;
 		}
 		said_next++;
-
-		encap_oneshot = ENCAPSULATION_MODE_TRANSPORT;
 	}
 
 	/* set up AH SA, if any */
@@ -2396,17 +2250,17 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 
 		passert(st->st_ah.keymat_len == keymat_size);
 
-		set_text_said(text_ah, &dst, ah_spi, &ip_protocol_ah);
-
 		*said_next = said_boilerplate;
 		said_next->spi = ah_spi;
 		said_next->esatype = ET_AH;
 		said_next->integ = integ;
 		said_next->authkeylen = st->st_ah.keymat_len;
 		said_next->authkey = ah_dst_keymat;
-		said_next->mode = encap_oneshot;
+		said_next->level = said_next - said;
 		said_next->reqid = reqid_ah(c->spd.reqid);
-		said_next->text_said = text_ah;
+		said_next->story = said_str(route.dst.host_addr, &ip_protocol_ah,
+					    ah_spi, &text_ah);
+
 		said_next->replay_window = c->sa_replay_window;
 		dbg("kernel: setting IPsec SA replay-window to %d", c->sa_replay_window);
 
@@ -2432,7 +2286,7 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 			outgoing_ref_set = true;	/* outgoing_ref_set not subsequently used */
 		}
 
-		if (!kernel_ops->add_sa(said_next, replace, st->st_logger)) {
+		if (!kernel_ops_add_sa(said_next, replace, st->st_logger)) {
 			/* scrub key from memory */
 			memset(said_next->authkey, 0, said_next->authkeylen);
 			goto fail;
@@ -2455,8 +2309,6 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 			incoming_ref_set = true;	/* incoming_ref_set not subsequently used */
 		}
 		said_next++;
-
-		encap_oneshot = ENCAPSULATION_MODE_TRANSPORT;	/* encap_oneshot not subsequently used */
 	}
 
 	/*
@@ -2467,63 +2319,12 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 	 * Note reversed ends.
 	 * Not much to be done on failure.
 	 */
-	dbg("kernel: %s() is thinking about installing inbound eroute? inbound=%d owner=#%lu mode=%d",
-	    __func__, inbound, c->spd.eroute_owner, mode);
+	dbg("kernel: %s() is thinking about installing inbound eroute? inbound=%d owner=#%lu %s",
+	    __func__, inbound, c->spd.eroute_owner,
+	    encap_mode_name(encap.mode));
 	if (inbound && c->spd.eroute_owner == SOS_NOBODY &&
 	    (c->ike_version != IKEv2 || c->spd.this.sec_label.len == 0)) {
 		dbg("kernel: %s() is installing inbound eroute", __func__);
-		struct pfkey_proto_info proto_info[4];
-		int i = 0;
-
-		/*
-		 * ??? why does this code care about
-		 * st->st_*.attrs.mode?
-		 * We have gone do some trouble to compute
-		 * "mode".  And later code uses
-		 * "mode".
-		 */
-		if (st->st_ipcomp.present) {
-			proto_info[i].proto = ip_protocol_comp.ipproto;
-			proto_info[i].mode =
-				st->st_ipcomp.attrs.mode;
-			proto_info[i].reqid = reqid_ipcomp(c->spd.reqid);
-			i++;
-		}
-
-		if (st->st_esp.present) {
-			proto_info[i].proto = IPPROTO_ESP;
-			proto_info[i].mode =
-				st->st_esp.attrs.mode;
-			proto_info[i].reqid = reqid_esp(c->spd.reqid);
-			i++;
-		}
-
-		if (st->st_ah.present) {
-			proto_info[i].proto = IPPROTO_AH;
-			proto_info[i].mode =
-				st->st_ah.attrs.mode;
-			proto_info[i].reqid = reqid_ah(c->spd.reqid);
-			i++;
-		}
-
-		/* ??? setting .proto to 0, an invalid value.  See /usr/include/linux/in.h. */
-		proto_info[i].proto = 0;
-
-		dbg("kernel: %s() before proto %d", __func__, proto_info[0].proto);
-
-		/*
-		 * ??? why is mode overwritten ONLY if true
-		 * (kernel_ops->inbound_eroute)?
-		 */
-		if (mode == ENCAPSULATION_MODE_TUNNEL) {
-			proto_info[0].mode =
-				ENCAPSULATION_MODE_TUNNEL;
-			for (i = 1; proto_info[i].proto != 0; i++)
-				proto_info[i].mode =
-					ENCAPSULATION_MODE_TRANSPORT;
-		}
-		dbg("kernel: %s() after proto %d", __func__, proto_info[0].proto);
-
 		uint32_t xfrm_if_id = c->xfrmi != NULL ?
 			c->xfrmi->if_id : 0;
 
@@ -2538,16 +2339,14 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		 * need reversing ...
 		 */
 		if (!raw_policy(KP_ADD_INBOUND,
-				&c->spd.that.host_addr,		/* this_host */
-				&c->spd.that.client,	/* this_client */
-				&c->spd.this.host_addr,	/* that_host */
-				&c->spd.this.client,	/* that_client */
-				inner_spi,		/* current spi - might not be used? */
-				inner_spi,		/* new spi */
-				proto,			/* SA proto */
+				&route.src.host_addr,	/* src_host */
+				&route.src.client,	/* src_client */
+				&route.dst.host_addr,	/* dst_host */
+				&route.dst.client,	/* dst_client */
+				/*old*/htonl(SPI_IGNORE), /*new*/htonl(SPI_IGNORE),
 				c->spd.this.protocol,	/* transport_proto */
-				esatype,		/* esatype */
-				proto_info,		/* " */
+				encap.inner_proto->ipproto,	/* esatype */
+				&encap,			/* " */
 				deltatime(0),		/* lifetime */
 				calculate_sa_prio(c, false),	/* priority */
 				&c->sa_marks,		/* IPsec SA marks */
@@ -2575,8 +2374,8 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		 */
 		for (s = said; s < said_next - 1; s++) {
 			dbg("kernel: grouping %s (ref=%u) and %s (ref=%u)",
-			    s[0].text_said, s[0].ref,
-			    s[1].text_said, s[1].ref);
+			    s[0].story, s[0].ref,
+			    s[1].story, s[1].ref);
 			if (!kernel_ops->grp_sa(s + 1, s)) {
 				log_state(RC_LOG, st, "grp_sa failed");
 				goto fail;
@@ -2600,10 +2399,9 @@ fail:
 	/* undo the done SPIs */
 	while (said_next-- != said) {
 		if (said_next->proto != 0) {
-			(void) del_spi(said_next->spi,
-				       said_next->proto,
-				       &src, said_next->dst.address,
-				       st->st_logger);
+			del_spi(said_next->spi, said_next->proto,
+				said_next->src.address, said_next->dst.address,
+				st->st_logger);
 		}
 	}
 	return false;
@@ -2665,7 +2463,8 @@ static bool teardown_half_ipsec_sa(struct state *st, bool inbound)
 	 * we are the initiator, have been redirected,
 	 * and yet this routine must use the old address.
 	 *
-	 * We point effective_that_host_address to the appropriate address.
+	 * We point effective_remote_host_address to the appropriate
+	 * address.
 	 */
 
 	ip_address effective_remote_address = c->spd.that.host_addr;
@@ -2681,9 +2480,7 @@ static bool teardown_half_ipsec_sa(struct state *st, bool inbound)
 			&c->spd.that.client,
 			&c->spd.this.host_addr,
 			&c->spd.this.client,
-			SPI_PASS, SPI_PASS,
-			c->ipsec_mode == ENCAPSULATION_MODE_TRANSPORT ?
-			&ip_protocol_esp : NULL,
+			htonl(SPI_IGNORE), htonl(SPI_IGNORE),
 			c->spd.this.protocol,
 			c->ipsec_mode == ENCAPSULATION_MODE_TRANSPORT ?
 			ET_ESP : ET_UNSPEC,
@@ -3213,14 +3010,14 @@ bool route_and_eroute(struct connection *c,
 				 */
 				struct bare_shunt *bs = *bspp;
 
+				ip_address dst = said_address(bs->said);
 				if (!raw_policy(KP_REPLACE_OUTBOUND,
-						&bs->said.dst,        /* should be useless */
+						&dst,        /* should be useless */
 						&bs->our_client,
-						&bs->said.dst,        /* should be useless */
+						&dst,        /* should be useless */
 						&bs->peer_client,
 						bs->said.spi,         /* unused? network order */
 						bs->said.spi,         /* network order */
-						&ip_protocol_internal,               /* proto */
 						sr->this.protocol,    /* transport_proto */
 						ET_INT,
 						esp_transport_proto_info,
@@ -3585,19 +3382,16 @@ bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */)
 		spi = p2->attrs.spi;
 	}
 
-	char text_said[SATOT_BUF];
-
-	set_text_said(text_said, dst, spi, proto);
-
+	said_buf sb;
 	struct kernel_sa sa = {
 		.spi = spi,
 		.proto = proto,
 		.src.address = src,
 		.dst.address = dst,
-		.text_said = text_said,
+		.story = said_str(*dst, proto, spi, &sb),
 	};
 
-	dbg("kernel: get_sa_info %s", text_said);
+	dbg("kernel: get_sa_info %s", sa.story);
 
 	uint64_t bytes;
 	uint64_t add_time;
@@ -3709,8 +3503,9 @@ bool orphan_holdpass(const struct connection *c, struct spd_route *sr,
 		bs->transport_proto = sr->this.protocol;
 		bs->policy_prio = BOTTOM_PRIO;
 
-		bs->said = said3(&selector_type(&sr->this.client)->address.any,
-				 htonl(negotiation_shunt), &ip_protocol_internal);
+		bs->said = said_from_address_protocol_spi(selector_type(&sr->this.client)->address.any,
+							  &ip_protocol_internal,
+							  htonl(negotiation_shunt));
 
 		bs->count = 0;
 		bs->last_activity = mononow();
@@ -3766,8 +3561,7 @@ bool orphan_holdpass(const struct connection *c, struct spd_route *sr,
 			bool ok = raw_policy(KP_REPLACE_OUTBOUND,
 					     &null_host, &src, &null_host, &dst,
 					     htonl(cur_shunt_spi), htonl(new_shunt_spi),
-					     &ip_protocol_internal, transport_proto,
-					     ET_INT,
+					     transport_proto, ET_INT,
 					     esp_transport_proto_info,
 					     deltatime(SHUNT_PATIENCE),
 					     0, /* we don't know connection for priority yet */
@@ -3813,7 +3607,9 @@ bool orphan_holdpass(const struct connection *c, struct spd_route *sr,
 				struct bare_shunt *bs = *bs_pp;
 				bs->why = why;
 				bs->policy_prio = policy_prio;
-				bs->said = said3(&null_host, htonl(new_shunt_spi), &ip_protocol_internal);
+				bs->said = said_from_address_protocol_spi(null_host,
+									  &ip_protocol_internal,
+									  htonl(new_shunt_spi));
 				bs->count = 0;
 				bs->last_activity = mononow();
 				dbg_bare_shunt("replace", bs);

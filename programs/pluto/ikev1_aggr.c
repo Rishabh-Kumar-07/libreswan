@@ -38,6 +38,7 @@
 #include "ikev1.h"
 #include "vendor.h"
 #include "nat_traversal.h"
+#include "ikev1_nat.h"
 #include "pluto_x509.h"
 #include "fd.h"
 #include "host_pair.h"
@@ -239,7 +240,7 @@ stf_status aggr_inI1_outR1(struct state *unused_st UNUSED,
 	 * be already filled-in.
 	 */
 	pexpect(st->st_p1isa.ptr == NULL);
-	st->st_p1isa = clone_hunk(pbs_in_as_shunk(&sa_pd->pbs), "sa in aggr_inI1_outR1()");
+	st->st_p1isa = clone_pbs_in_as_chunk(&sa_pd->pbs, "sa in aggr_inI1_outR1()");
 
 	/*
 	 * parse_isakmp_sa picks the right group, which we need to know

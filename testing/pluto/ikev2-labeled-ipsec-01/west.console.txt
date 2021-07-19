@@ -4,12 +4,7 @@ west #
 west #
  # install selinux; generated in OUTPUT by east
 west #
- semodule -i -v OUTPUT/ipsecspd.pp
-libsemanage.map_file: Unable to open -v
- (No such file or directory).
-libsemanage.semanage_direct_install_file: Unable to read file -v
- (No such file or directory).
-semodule:  Failed on -v!
+ semodule -i OUTPUT/ipsecspd.pp
 west #
  # start pluto
 west #
@@ -86,7 +81,7 @@ west #
 west #
  ipsec trafficstatus
 006 #2: "labeled"[1] 192.1.2.23, type=ESP, add_time=1234567890, inBytes=0, outBytes=173, id='@east'
-006 #3: "labeled"[1] 192.1.2.23, type=ESP, add_time=1234567890, inBytes=104, outBytes=0, id='@east'
+006 #3: "labeled"[2] 192.1.2.23, type=ESP, add_time=1234567890, inBytes=104, outBytes=0, id='@east'
 west #
  # there should be no bare shunts
 west #
@@ -105,7 +100,7 @@ west #
 west #
  # reqid. And there should be one set of tunnel policies using the
 west #
- # configured ipsec_spd_t label, plus an outgoing %trap policy
+ # configured ipsec_spd_t label, and no outgoing %trap policy
 west #
  ../../guestbin/ipsec-look.sh
 west NOW
@@ -157,8 +152,14 @@ NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
 west #
+ # The IKE SA should be associated with the template connection
+west #
+ ipsec status |grep STATE_
+000 #1: "labeled":500 STATE_V2_ESTABLISHED_IKE_SA (established IKE SA); REKEY in XXs; newest ISAKMP; idle;
+000 #2: "labeled"[1] 192.1.2.23:500 STATE_V2_ESTABLISHED_CHILD_SA (IPsec SA established); REKEY in XXs; newest IPSEC; isakmp#1; idle;
+000 #3: "labeled"[2] 192.1.2.23:500 STATE_V2_ESTABLISHED_CHILD_SA (IPsec SA established); REKEY in XXs; newest IPSEC; isakmp#1; idle;
+west #
  semodule -r ipsecspd
-libsemanage.semanage_direct_remove_key: Unable to remove module ipsecspd at priority 400. (No such file or directory).
-semodule:  Failed!
+libsemanage.semanage_direct_remove_key: Removing last ipsecspd module (no other ipsecspd module exists at another priority).
 west #
  

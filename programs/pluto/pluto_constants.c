@@ -228,7 +228,7 @@ static const char *const stf_status_strings[] = {
 	A(STF_SUSPEND),
 	A(STF_OK),
 	A(STF_INTERNAL_ERROR),
-	A(STF_V2_DELETE_EXCHANGE_INITIATOR_IKE_SA),
+	A(STF_V2_DELETE_IKE_AUTH_INITIATOR),
 	A(STF_FATAL),
 	A(STF_FAIL),
 #undef A
@@ -432,7 +432,7 @@ static const char *kernel_policy_op_name[] = {
 };
 
 enum_names kernel_policy_op_names = {
-	0, KP_DELETE_INBOUND,
+	0, elemsof(kernel_policy_op_name)-1,
 	ARRAY_REF(kernel_policy_op_name),
 	.en_prefix = "KP_",
 };

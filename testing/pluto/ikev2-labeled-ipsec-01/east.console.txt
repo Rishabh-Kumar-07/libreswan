@@ -38,7 +38,7 @@ east #
 east #
  # reqid. And there should be one set of tunnel policies using the
 east #
- # configured ipsec_spd_t label, plus an outgoing %trap policy
+ # configured ipsec_spd_t label, and no outgoing %trap policy
 east #
  ../../guestbin/ipsec-look.sh
 east NOW
@@ -89,6 +89,13 @@ default via 192.1.2.254 dev eth1
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
+east #
+ # The IKE SA should be associated with the template connection
+east #
+ ipsec status |grep STATE_
+000 #1: "labeled":500 STATE_V2_ESTABLISHED_IKE_SA (established IKE SA); REKEY in XXs; newest ISAKMP; idle;
+000 #2: "labeled"[1] 192.1.2.45:500 STATE_V2_ESTABLISHED_CHILD_SA (IPsec SA established); REKEY in XXs; newest IPSEC; isakmp#1; idle;
+000 #3: "labeled"[2] 192.1.2.45:500 STATE_V2_ESTABLISHED_CHILD_SA (IPsec SA established); REKEY in XXs; newest IPSEC; isakmp#1; idle;
 east #
  semodule -r ipsecspd
 libsemanage.semanage_direct_remove_key: Removing last ipsecspd module (no other ipsecspd module exists at another priority).

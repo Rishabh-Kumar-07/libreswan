@@ -67,8 +67,7 @@ static bool parse_secctx_attr(pb_stream *pbs UNUSED, struct state *st)
 	return FALSE;
 }
 #else
-#include "security_selinux.h"
-#include "labeled_ipsec.h"
+#include "ikev1_labeled_ipsec.h"
 #include <linux/xfrm.h> /* for XFRM_SC_DOI_LSM and XFRM_SC_ALG_SELINUX */
 static bool parse_secctx_attr(struct pbs_in *pbs, struct state *st)
 {
@@ -120,10 +119,10 @@ static bool parse_secctx_attr(struct pbs_in *pbs, struct state *st)
 		return false;
 	}
 
-	replace_chunk(&st->st_seen_sec_label, clone_hunk(sec_label, "st_seen_sec_label"));
+	replace_chunk(&st->st_v1_seen_sec_label, clone_hunk(sec_label, "st_seen_sec_label"));
 	if (DBGP(DBG_BASE)) {
 		DBG_dump_hunk("connection security context IPsec Security Label verification succeeded with:",
-			      st->st_seen_sec_label);
+			      st->st_v1_seen_sec_label);
 	}
 	return true;
 }
@@ -1265,11 +1264,11 @@ bool ikev1_out_sa(pb_stream *outs,
 					if (c->spd.this.sec_label.len != 0) {
 						chunk_t out_label = c->spd.this.sec_label;
 
-						if (st->st_acquired_sec_label.len != 0) {
-							out_label = st->st_acquired_sec_label;
+						if (st->st_v1_acquired_sec_label.len != 0) {
+							out_label = st->st_v1_acquired_sec_label;
 						} else {
-							if (st->st_seen_sec_label.len !=0)
-								out_label = st->st_seen_sec_label;
+							if (st->st_v1_seen_sec_label.len !=0)
+								out_label = st->st_v1_seen_sec_label;
 						}
 
 						pb_stream val_pbs;
