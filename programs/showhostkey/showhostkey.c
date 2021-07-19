@@ -325,7 +325,7 @@ static int show_confkey(struct private_key_stuff *pks,
 		       base64);
 		pfree(base64);
 		break;
-	case PKK_ECDSA:
+	case PKK_EC:
 		printf("\t# ecdsakey %s\n",
 		       pks->keyid.keyid);
 		printf("\t%secdsasigkey=%s\n", side,
