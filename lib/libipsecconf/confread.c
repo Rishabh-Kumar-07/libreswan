@@ -1488,7 +1488,7 @@ static bool load_conn(struct starter_conn *conn,
 			} else if (streq(val, "ecdsa-identity")) {
 				conn->policy |= POLICY_ECDSA;
 				conn->sighash_policy |= POL_SIGHASH_IDENTITY;
-				conn->sighash_policy |= POL_SIGHASH_SHA2_256;
+				conn->sighash_policy |= POL_SIGHASH_SHA2_384;
 			} else if (streq(val, "ecdsa-sha2_384")) {
 				conn->policy |= POLICY_ECDSA;
 				conn->sighash_policy |= POL_SIGHASH_SHA2_384;
