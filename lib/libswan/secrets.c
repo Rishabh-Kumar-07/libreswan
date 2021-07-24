@@ -544,7 +544,7 @@ const struct pubkey_type *pubkey_alg_type(enum pubkey_alg alg)
 	static const struct pubkey_type *pubkey_types[] = {
 		[PUBKEY_ALG_RSA] = &pubkey_type_rsa,
 		[PUBKEY_ALG_ECDSA] = &pubkey_type_ecdsa,
-		[PUBKEY_ALG_ECDSA] = &pubkey_type_eddsa,
+		[PUBKEY_ALG_EDDSA] = &pubkey_type_eddsa,
 	};
 	passert(alg < elemsof(pubkey_types));
 	const struct pubkey_type *type = pubkey_types[alg];
@@ -1572,7 +1572,7 @@ static const struct pubkey_type *pubkey_type_nss(SECKEYPublicKey *pubk)
 	case rsaKey:
 		return &pubkey_type_rsa;
 	case ecKey:{
-	    if (pk11_ECGetPubkeyEncoding(pubKey) == ECPoint_XOnly)
+	    if (pk11_ECGetPubkeyEncoding(pubk) == ECPoint_XOnly)
 	        return &pubkey_type_eddsa;
 	    else
 	        return &pubkey_type_ecdsa;
