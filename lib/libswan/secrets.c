@@ -451,6 +451,67 @@ static struct hash_signature ECDSA_sign_hash(const struct private_key_stuff *pks
 	return signature;
 }
 
+static struct hash_signature EDDSA_sign_hash(const struct private_key_stuff *pks,
+					     const uint8_t *hash_val, size_t hash_len,
+					     const struct hash_desc *hash_algo_unused UNUSED,
+					     struct logger *logger)
+{
+
+	if (!pexpect(pks->private_key != NULL)) {
+		dbg("no private key!");
+		return (struct hash_signature) { .len = 0, };
+	}
+
+	DBGF(DBG_CRYPT, "EDDSA_sign_hash: Started using NSS");
+
+	/* point HASH to sign at HASH_VAL */
+	SECItem hash_to_sign = {
+		.type = siBuffer,
+		.len = hash_len,
+		.data = DISCARD_CONST(uint8_t *, hash_val),
+	};
+
+	/* point signature at the SIG_VAL buffer */
+	uint8_t raw_signature_data[sizeof(struct hash_signature)]; // sizeof(struct hash_signature)
+	SECItem raw_signature = {
+		.type = siBuffer,
+		.len = PK11_SignatureLen(pks->private_key),
+		.data = raw_signature_data,
+	};
+	passert(raw_signature.len <= sizeof(raw_signature_data));
+	dbg("EDDSA signature.len %d", raw_signature.len);
+
+	/* create the raw signature */
+	SECStatus s = PK11_Sign(pks->private_key, &raw_signature, &hash_to_sign);
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump("sig_from_nss", raw_signature.data, raw_signature.len);
+	}
+	if (s != SECSuccess) {
+		/* PR_GetError() returns the thread-local error */
+		llog_nss_error(RC_LOG_SERIOUS, logger,
+			       "EDDSA sign function failed");
+		return (struct hash_signature) { .len = 0, };
+	}
+
+	SECItem encoded_signature;
+	if (DSAU_EncodeDerSigWithLen(&encoded_signature, &raw_signature,
+				     raw_signature.len) != SECSuccess) {
+		/* PR_GetError() returns the thread-local error */
+		llog_nss_error(RC_LOG, logger,
+			       "NSS: constructing DER encoded EDDSA signature using DSAU_EncodeDerSigWithLen() failed:");
+		return (struct hash_signature) { .len = 0, };
+	}
+	struct hash_signature signature = {
+		.len = encoded_signature.len,
+	};
+	passert(encoded_signature.len <= sizeof(signature.ptr/*an-array*/));
+	memcpy(signature.ptr, encoded_signature.data, encoded_signature.len);
+	SECITEM_FreeItem(&encoded_signature, PR_FALSE);
+
+	DBGF(DBG_CRYPT, "EDDSA_sign_hash: Ended using NSS");
+	return signature;
+}
+
 const struct pubkey_type pubkey_type_ecdsa = {
 	.alg = PUBKEY_ALG_ECDSA,
 	.name = "ECDSA",
@@ -464,11 +525,26 @@ const struct pubkey_type pubkey_type_ecdsa = {
 	.extract_pubkey_content = EC_extract_pubkey_content,
 };
 
+const struct pubkey_type pubkey_type_eddsa = {
+	.alg = PUBKEY_ALG_EDDSA,
+	.name = "EDDSA",
+	.private_key_kind = PKK_EC,
+	.unpack_pubkey_content = EC_unpack_pubkey_content,
+	.free_pubkey_content = EC_free_pubkey_content,
+	.extract_private_key_pubkey_content = EC_extract_private_key_pubkey_content,
+	.free_secret_content = EC_free_secret_content,
+	.secret_sane = EC_secret_sane,
+	.sign_hash = EDDSA_sign_hash,
+	.extract_pubkey_content = EC_extract_pubkey_content,
+};
+
+
 const struct pubkey_type *pubkey_alg_type(enum pubkey_alg alg)
 {
 	static const struct pubkey_type *pubkey_types[] = {
 		[PUBKEY_ALG_RSA] = &pubkey_type_rsa,
 		[PUBKEY_ALG_ECDSA] = &pubkey_type_ecdsa,
+		[PUBKEY_ALG_ECDSA] = &pubkey_type_eddsa,
 	};
 	passert(alg < elemsof(pubkey_types));
 	const struct pubkey_type *type = pubkey_types[alg];
@@ -487,6 +563,7 @@ const keyid_t *pubkey_keyid(const struct pubkey *pk)
 	switch (pk->type->alg) {
 	case PUBKEY_ALG_RSA:
 	case PUBKEY_ALG_ECDSA:
+	case PUBKEY_ALG_EDDSA:
 		return &pk->keyid;
 	default:
 		bad_case(pk->type->alg);
@@ -514,6 +591,7 @@ const keyid_t *secret_keyid(const struct secret *secret)
 		switch (secret->pks.pubkey_type->alg) {
 		case PUBKEY_ALG_RSA:
 		case PUBKEY_ALG_ECDSA:
+		case PUBKEY_ALG_EDDSA:
 			return &secret->pks.keyid;
 		default:
 			bad_case(secret->pks.pubkey_type->alg);
@@ -528,6 +606,7 @@ unsigned pubkey_size(const struct pubkey *pk)
 	switch (pk->type->alg) {
 	case PUBKEY_ALG_RSA:
 	case PUBKEY_ALG_ECDSA:
+	case PUBKEY_ALG_EDDSA:
 		return pk->size;
 	default:
 		bad_case(pk->type->alg);
@@ -1492,8 +1571,12 @@ static const struct pubkey_type *pubkey_type_nss(SECKEYPublicKey *pubk)
 	switch (key_type) {
 	case rsaKey:
 		return &pubkey_type_rsa;
-	case ecKey:
-		return &pubkey_type_ecdsa;
+	case ecKey:{
+	    if (pk11_ECGetPubkeyEncoding(pubKey) == ECPoint_XOnly)
+	        return &pubkey_type_eddsa;
+	    else
+	        return &pubkey_type_ecdsa;
+	}
 	default:
 		return NULL;
 	}
@@ -1505,8 +1588,15 @@ static const struct pubkey_type *private_key_type_nss(SECKEYPrivateKey *private_
 	switch (key_type) {
 	case rsaKey:
 		return &pubkey_type_rsa;
-	case ecKey:
-		return &pubkey_type_ecdsa;
+	case ecKey:{
+	    SECKEYPublicKey *pubk = SECKEY_ConvertToPublicKey(private_key);
+	    if(pubk == NULL)
+	        return NULL;
+	    if (pk11_ECGetPubkeyEncoding(pubKey) == ECPoint_XOnly)
+	        return &pubkey_type_eddsa;
+	    else
+	        return &pubkey_type_ecdsa;
+	}
 	default:
 		return NULL;
 	}

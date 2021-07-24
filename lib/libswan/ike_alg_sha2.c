@@ -36,6 +36,7 @@
 
 static const uint8_t asn1_blob_rsa_sha2_256[] =	{ LEN_RSA_PSS_SHA2_BLOB, RSA_PSS_SHA256_BLOB };
 static const uint8_t asn1_blob_ecdsa_sha2_256[] = { LEN_ECDSA_SHA2_BLOB, ECDSA_SHA256_BLOB };
+static const uint8_t asn1_blob_eddsa_ed25519[] = { LEN_EDDSA_ED25519_BLOB, EDDSA_ED25519_BLOB };
 
 const CK_RSA_PKCS_PSS_PARAMS rsa_pss_sha2_256 = {
 	.hashAlg = CKM_SHA256,
@@ -196,6 +197,7 @@ const struct hash_desc ike_alg_hash_identity = {
 		.fips = false,
 	},
 
+    .hash_asn1_blob_eddsa = THING_AS_HUNK(asn1_blob_eddsa_ed25519),
 };
 
 
