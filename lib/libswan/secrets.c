@@ -59,6 +59,7 @@
 #include "secrets.h"
 #include "certs.h"
 #include "lex.h"
+#include "keys.h"
 
 #include "lswconf.h"
 #include "lswnss.h"
@@ -84,38 +85,6 @@
  * @param ... strings
  * @return err_t
  */
-
- ECPointEncoding
- pk11_ECGetPubkeyEncoding(const SECKEYPublicKey *pubKey)
- {
-     SECItem oid;
-     SECStatus rv;
-     PORTCheapArenaPool tmpArena;
-     ECPointEncoding encoding = ECPoint_Undefined;
-
-     PORT_InitCheapArena(&tmpArena, DER_DEFAULT_CHUNKSIZE);
-
-     /* decode the OID tag */
-     rv = SEC_QuickDERDecodeItem(&tmpArena.arena, &oid,
-                                 SEC_ASN1_GET(SEC_ObjectIDTemplate),
-                                 &pubKey->u.ec.DEREncodedParams);
-     if (rv == SECSuccess) {
-         SECOidTag tag = SECOID_FindOIDTag(&oid);
-         switch (tag) {
-             case SEC_OID_CURVE25519:
-                 encoding = ECPoint_XOnly;
-                 break;
-             case SEC_OID_SECG_EC_SECP256R1:
-             case SEC_OID_SECG_EC_SECP384R1:
-             case SEC_OID_SECG_EC_SECP521R1:
-             default:
-                 /* unknown curve, default to uncompressed */
-                 encoding = ECPoint_Uncompressed;
-         }
-     }
-     PORT_DestroyCheapArena(&tmpArena);
-     return encoding;
- }
 
 
 static err_t builddiag(const char *fmt, ...) PRINTF_LIKE(1);	/* NOT RE-ENTRANT */
