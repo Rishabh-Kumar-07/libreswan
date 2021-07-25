@@ -264,4 +264,6 @@ diag_t create_pubkey_from_cert(const struct id *id,
 			       CERTCertificate *cert, struct pubkey **pk,
 			       struct logger *logger) MUST_USE_RESULT;
 
+ECPointEncoding pk11_ECGetPubkeyEncoding(const SECKEYPublicKey *pubKey);
+
 #endif /* _SECRETS_H */
