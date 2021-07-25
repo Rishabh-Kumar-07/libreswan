@@ -59,7 +59,6 @@
 #include "secrets.h"
 #include "certs.h"
 #include "lex.h"
-#include "keys.h"
 
 #include "lswconf.h"
 #include "lswnss.h"

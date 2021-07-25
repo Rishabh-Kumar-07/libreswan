@@ -33,6 +33,8 @@
 #include "diag.h"
 #include "keyid.h"
 #include "refcnt.h"
+#include "../programs/pluto/keys.h"
+
 
 struct logger;
 struct state;	/* forward declaration */
