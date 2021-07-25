@@ -42,6 +42,7 @@
 #include <cert.h>
 #include <cryptohi.h>
 #include <keyhi.h>
+#include<secport.h>
 
 #include "lswglob.h"
 #include "sysdep.h"
