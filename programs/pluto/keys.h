@@ -93,6 +93,5 @@ extern diag_t authsig_and_log_using_pubkey(struct ike_sa *ike,
 					   const struct pubkey_type *type,
 					   authsig_using_pubkey_fn *try_pubkey);
 
-ECPointEncoding pk11_ECGetPubkeyEncoding(const SECKEYPublicKey *pubKey);
 
 #endif /* _KEYS_H */
