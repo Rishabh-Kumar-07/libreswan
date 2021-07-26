@@ -39,8 +39,6 @@ LIB = libswan.a
 
 OBJS += x509dn.o asn1.o oid.o
 
-
-USERLAND_LDFLAGS += $(NSS_UTIL_LDFLAGS)
 OBJS += constants.o \
 	id.o \
 	initaddr.o \
