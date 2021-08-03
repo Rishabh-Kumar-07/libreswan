@@ -54,6 +54,7 @@
 
 #include "defs.h"
 #include "connections.h" /* needs id.h */
+#include "connection_db.h"
 #include "pending.h"
 #include "foodgroups.h"
 #include "packet.h"
@@ -368,17 +369,17 @@ void update_ends_from_this_host_addr(struct end *this, struct end *that)
 	const struct ip_info *afi = address_type(&this->host_addr);
 	if (afi == NULL) {
 		dbg("%s.host_addr's address family is unknown; skipping default_end()",
-		    this->leftright);
+		    this->config->leftright);
 		return;
 	}
 
 	if (address_is_any(this->host_addr)) {
 		dbg("%s.host_addr's is %%any; skipping default_end()",
-		    this->leftright);
+		    this->config->leftright);
 		return;
 	}
 
-	dbg("updating connection from %s.host_addr", this->leftright);
+	dbg("updating connection from %s.host_addr", this->config->leftright);
 
 	/* Default ID to IP (but only if not NO_IP -- WildCard) */
 	if (this->id.kind == ID_NONE && address_is_specified(this->host_addr)) {
@@ -393,7 +394,7 @@ void update_ends_from_this_host_addr(struct end *this, struct end *that)
 		that->host_nexthop = this->host_addr;
 		address_buf ab;
 		dbg("%s host_nexthop %s",
-		    that->leftright, str_address(&that->host_nexthop, &ab));
+		    that->config->leftright, str_address(&that->host_nexthop, &ab));
 	}
 
 	/*
@@ -402,7 +403,7 @@ void update_ends_from_this_host_addr(struct end *this, struct end *that)
 	 * NAT port (and also ESP=0 prefix messages).
 	 */
 	unsigned host_port = hport(end_host_port(this, that));
-	dbg("%s() %s.host_port: %u->%u", __func__, this->leftright,
+	dbg("%s() %s.host_port: %u->%u", __func__, this->config->leftright,
 	    this->host_port, host_port);
 	this->host_port = host_port;
 
@@ -743,49 +744,14 @@ static void unshare_connection(struct connection *c)
 }
 
 static int extract_end(struct connection *c,
+		       struct end *dst,
+		       struct config_end *config_end,
 		       const struct whack_end *src,
-		       enum left_right end_index,
+		       struct end *other_end,
 		       struct logger *logger/*connection "..."*/)
 {
-	/*
-	 * Since at this point 'this' and 'that' are disoriented their
-	 * names are pretty much meaningless.  Hence the strange
-	 * combination if 'this' and 'left' and 'that' and 'right.
-	 *
-	 * XXX: This is all too confusing - wouldn't it be simpler if
-	 * there was a '.left' and '.right' (or even .end[2] - this
-	 * code seems to be crying out for a for loop) and then having
-	 * orient() set up .local and .remote pointers or indexes
-	 * accordingly?
-	 */
-
-	struct config_end *config = &c->config[end_index];
-	config->end_index = end_index;
-	struct end *dst;
-	struct end *other_end;
-	const char *leftright;
-	switch (end_index) {
-	case LEFT_END:
-		/* start with: LEFT == LOCAL == THIS */
-		leftright = "left";
-		dst = &c->spd.this;
-		other_end = &c->spd.that;
-		c->local = config;
-		break;
-	case RIGHT_END:
-		/* start with: RIGHT == REMOTE == THAT */
-		leftright = "right";
-		dst = &c->spd.that;
-		other_end = &c->spd.this;
-		c->remote = config;
-		break;
-	default:
-		bad_case(end_index);
-	}
-	dst->config = config;
-	dst->leftright = leftright;
-	config->end_name = leftright;
-
+	passert(dst->config == config_end);
+	const char *leftright = dst->config->leftright;
 	bool same_ca = 0;
 
 	/*
@@ -812,6 +778,12 @@ static int extract_end(struct connection *c,
 		if (ugh != NULL) {
 			llog(RC_LOG, logger, "bad %s; ignored", ugh);
 			dst->sec_label = empty_chunk;
+		} else {
+			/*
+			 * `dst->sec_label` is the `policy-label` from
+			 * ipsec.conf.
+			 */
+			dst->has_config_policy_label = true;
 		}
 	}
 
@@ -856,20 +828,20 @@ static int extract_end(struct connection *c,
 		if (src->ckaid != NULL) {
 			llog(RC_LOG, logger,
 				    "warning: ignoring %s ckaid '%s' and using %s certificate '%s'",
-				    dst->leftright, src->cert,
-				    dst->leftright, src->cert);
+				    leftright, src->cert,
+				    leftright, src->cert);
 		}
 		if (src->rsasigkey != NULL) {
 			llog(RC_LOG, logger,
 				    "warning: ignoring %s rsasigkey '%s' and using %s certificate '%s'",
-				    dst->leftright, src->cert,
-				    dst->leftright, src->cert);
+				    leftright, src->cert,
+				    leftright, src->cert);
 		}
 		CERTCertificate *cert = get_cert_by_nickname_from_nss(src->cert, logger);
 		if (cert == NULL) {
 			llog(RC_FATAL, logger,
 				    "failed to add connection: %s certificate '%s' not found in the NSS database",
-				    dst->leftright, src->cert);
+				    leftright, src->cert);
 			return -1; /* fatal */
 		}
 		diag_t diag = add_end_cert_and_preload_private_key(cert, dst,
@@ -884,7 +856,7 @@ static int extract_end(struct connection *c,
 		if (src->ckaid != NULL) {
 			llog(RC_LOG, logger,
 				    "warning: ignoring %s ckaid '%s' and using %s rsasigkey",
-				    dst->leftright, src->ckaid, dst->leftright);
+				    leftright, src->ckaid, leftright);
 		}
 		/*
 		 * XXX: hack: whack will load the rsasigkey in a
@@ -909,12 +881,12 @@ static int extract_end(struct connection *c,
 		if (err != NULL) {
 			llog(RC_FATAL, logger,
 				    "failed to add connection: %s raw public key invalid: %s",
-				    dst->leftright, err);
+				    leftright, err);
 			return -1;
 		}
 		ckaid_buf ckb;
 		dbg("saving %s CKAID %s extracted from raw %s public key",
-		    dst->leftright, str_ckaid(&ckaid, &ckb), type->name);
+		    leftright, str_ckaid(&ckaid, &ckb), type->name);
 		dst->ckaid = clone_const_thing(ckaid, "raw pubkey's ckaid");
 		type->free_pubkey_content(&pkc);
 		/* try to pre-load the private key */
@@ -923,12 +895,12 @@ static int extract_end(struct connection *c,
 		if (err != NULL) {
 			ckaid_buf ckb;
 			dbg("no private key matching %s CKAID %s: %s",
-			    dst->leftright, str_ckaid(dst->ckaid, &ckb), err);
+			    leftright, str_ckaid(dst->ckaid, &ckb), err);
 		} else if (load_needed) {
 			ckaid_buf ckb;
 			llog(RC_LOG|LOG_STREAM/*not-whack-for-now*/, logger,
 				    "loaded private key matching %s CKAID %s",
-				    dst->leftright, str_ckaid(dst->ckaid, &ckb));
+				    leftright, str_ckaid(dst->ckaid, &ckb));
 		}
 	} else if (src->ckaid != NULL) {
 		ckaid_t ckaid;
@@ -938,7 +910,7 @@ static int extract_end(struct connection *c,
 			/* XXX: don't trust whack */
 			llog(RC_FATAL, logger,
 				    "failed to add connection: %s CKAID '%s' invalid: %s",
-				    dst->leftright, src->ckaid, err);
+				    leftright, src->ckaid, err);
 			return -1; /* fatal */
 		}
 		/*
@@ -962,19 +934,19 @@ static int extract_end(struct connection *c,
 			}
 		} else {
 			dbg("%s CKAID '%s' did not match a certificate in the NSS database",
-			    dst->leftright, src->ckaid);
+			    leftright, src->ckaid);
 			/* try to pre-load the private key */
 			bool load_needed;
 			err_t err = preload_private_key_by_ckaid(&ckaid, &load_needed, logger);
 			if (err != NULL) {
 				ckaid_buf ckb;
 				dbg("no private key matching %s CKAID %s: %s",
-				    dst->leftright, str_ckaid(dst->ckaid, &ckb), err);
+				    leftright, str_ckaid(dst->ckaid, &ckb), err);
 			} else {
 				ckaid_buf ckb;
 				llog(RC_LOG|LOG_STREAM/*not-whack-for-now*/, logger,
 					    "loaded private key matching %s CKAID %s",
-					    dst->leftright, str_ckaid(dst->ckaid, &ckb));
+					    leftright, str_ckaid(dst->ckaid, &ckb));
 			}
 		}
 	}
@@ -1000,8 +972,8 @@ static int extract_end(struct connection *c,
 	dst->authby = src->authby;
 
 	/* save some defaults */
-	config->client.subnet = src->client;
-	config->client.protoport = src->protoport;
+	config_end->client.subnet = src->client;
+	config_end->client.protoport = src->protoport;
 
 	/*
 	 * .has_client means that .client contains a hardwired value,
@@ -1026,12 +998,12 @@ static int extract_end(struct connection *c,
 	dst->updown = clone_str(src->updown, "updown");
 	dst->sendcert =  src->sendcert;
 
-	config->host.ikeport = src->host_ikeport;
+	config_end->host.ikeport = src->host_ikeport;
 	if (src->host_ikeport > 65535) {
 		llog(RC_BADID, logger,
 			    "%sikeport=%u must be between 1..65535, ignored",
 			    leftright, src->host_ikeport);
-		config->host.ikeport = 0;
+		config_end->host.ikeport = 0;
 	}
 
 	/*
@@ -1185,6 +1157,7 @@ diag_t add_end_cert_and_preload_private_key(CERTCertificate *cert,
 	passert(cert != NULL);
 	dst_end->cert.nss_cert = NULL;
 	const char *nickname = cert->nickname;
+	const char *leftright = dst_end->config->leftright;
 
 	/*
 	 * A copy of this code lives in nss_cert_verify.c :/
@@ -1200,7 +1173,7 @@ diag_t add_end_cert_and_preload_private_key(CERTCertificate *cert,
 		    ((pk->u.rsa.modulus.len * BITS_PER_BYTE) < FIPS_MIN_RSA_KEY_SIZE)) {
 			SECKEY_DestroyPublicKey(pk);
 			return diag("FIPS: rejecting %s certificate '%s' with key size %d which is under %d",
-				    dst_end->leftright, nickname,
+				    leftright, nickname,
 				    pk->u.rsa.modulus.len * BITS_PER_BYTE,
 				    FIPS_MIN_RSA_KEY_SIZE);
 		}
@@ -1215,14 +1188,14 @@ diag_t add_end_cert_and_preload_private_key(CERTCertificate *cert,
 	if (CERT_CheckCertValidTimes(cert, PR_Now(), FALSE) !=
 			secCertTimeValid) {
 		return diag("%s certificate '%s' is expired or not yet valid",
-			    dst_end->leftright, nickname);
+			    leftright, nickname);
 	}
 
-	dbg("loading %s certificate \'%s\' pubkey", dst_end->leftright, nickname);
+	dbg("loading %s certificate \'%s\' pubkey", leftright, nickname);
 	if (!add_pubkey_from_nss_cert(&pluto_pubkeys, &dst_end->id, cert, logger)) {
 		/* XXX: push diag_t into add_pubkey_from_nss_cert()? */
 		return diag("%s certificate \'%s\' pubkey could not be loaded",
-			    dst_end->leftright, nickname);
+			    leftright, nickname);
 	}
 
 	dst_end->cert.nss_cert = cert;
@@ -1233,7 +1206,7 @@ diag_t add_end_cert_and_preload_private_key(CERTCertificate *cert,
 	 *
 	 */
 	if (preserve_ca || dst_end->ca.ptr != NULL) {
-		dbg("preserving existing %s ca", dst_end->leftright);
+		dbg("preserving existing %s ca", leftright);
 	} else {
 		dst_end->ca = clone_secitem_as_chunk(cert->derIssuer, "issuer ca");
 	}
@@ -1254,11 +1227,11 @@ diag_t add_end_cert_and_preload_private_key(CERTCertificate *cert,
 	err_t ugh = preload_private_key_by_cert(&dst_end->cert, &load_needed, logger);
 	if (ugh != NULL) {
 		dbg("no private key matching %s certificate %s: %s",
-		    dst_end->leftright, nickname, ugh);
+		    leftright, nickname, ugh);
 	} else if (load_needed) {
 		llog(RC_LOG|LOG_STREAM/*not-whack-for-now*/, logger,
-			    "loaded private key matching %s certificate '%s'",
-			    dst_end->leftright, nickname);
+		     "loaded private key matching %s certificate '%s'",
+		     leftright, nickname);
 	}
 	return NULL;
 }
@@ -1898,9 +1871,15 @@ static bool extract_connection(const struct whack_message *wm,
 	     "n/a"));
 
 	/*
-	 * Since at this point 'this' and 'that' are disoriented their
-	 * names are pretty much meaningless.  Hence the strange
-	 * combination if 'this' and 'left' and 'that' and 'right.
+	 * At this point THIS and THAT are disoriented so
+	 * distinguishing one as local and the other as remote is
+	 * pretty much meaningless.
+	 *
+	 * Somewhat arbitrarially (as in this is the way it's always
+	 * been) start with:
+	 *
+	 *    LEFT == LOCAL / THIS
+	 *    RIGHT == REMOTE / THAT
 	 *
 	 * XXX: This is all too confusing - wouldn't it be simpler if
 	 * there was a '.left' and '.right' (or even .end[2] - this
@@ -1908,11 +1887,29 @@ static bool extract_connection(const struct whack_message *wm,
 	 * orient() set up .local and .remote pointers or indexes
 	 * accordingly?
 	 */
-	int same_leftca = extract_end(c, &wm->left, LEFT_END, c->logger);
+
+	for (enum left_right end_index = 0; end_index < elemsof(c->config.end); end_index++) {
+		struct config_end *config_end = &c->config.end[end_index];
+		config_end->end_index = end_index;
+		config_end->leftright = (end_index == LEFT_END ? "left" :
+					 end_index == RIGHT_END ? "right" :
+					 NULL);
+		passert(config_end->leftright != NULL);
+	}
+
+	struct end *left = &c->spd.this;
+	struct end *right = &c->spd.that;
+	left->config = c->local = &c->config.end[LEFT_END];
+	right->config = c->remote = &c->config.end[RIGHT_END];
+
+	int same_leftca = extract_end(c, left, &c->config.end[LEFT_END], &wm->left,
+				      /*other_end*/right, c->logger);
 	if (same_leftca < 0) {
 		return false;
 	}
-	int same_rightca = extract_end(c, &wm->right, RIGHT_END, c->logger);
+
+	int same_rightca = extract_end(c, right, &c->config.end[RIGHT_END], &wm->right,
+				       /*other_end*/left, c->logger);
 	if (same_rightca < 0) {
 		return false;
 	}
@@ -2263,7 +2260,34 @@ struct connection *instantiate(struct connection *c,
 	}
 	unshare_connection(d);
 
-	d->kind = CK_INSTANCE;
+	if ((c->spd.that.host_type == KH_ANY) /* Wildcard peer IP */ &&
+		(c->spd.this.sec_label.len > 0) /* Security label */ &&
+		c->spd.this.has_config_policy_label /* Label from `policy-label` */) {
+		passert(c->kind == CK_TEMPLATE);
+		/*
+		 * In this case, `c` is a template connection due to _both_:
+		 *  - a peer wildcard IP address (`%any`)
+		 *    and
+		 *  - a security label from the user-specified connection configuration's `policy-label`.
+		 *
+		 * At this point, we are instantiating a connection with an
+		 * actual address but still don' t have the actual security
+		 * label used for network transmission, i.e. this function
+		 * doesn't have access to a label retrieved via Netlink
+		 * `ACQUIRE` or received from the peer. Therefore, the newly
+		 * instantiated connection remains a template since its current
+		 * security label value is the label from `policy-label`.
+		 *
+		 * The caller of this function is expected to update `d->kind`
+		 * to `CK_INSTANCE` if `d` ends up getting a label used for
+		 * network transmission.
+		 *
+		 * And so, let a template beget another template.
+		 */
+		d->kind = CK_TEMPLATE;
+	} else {
+		d->kind = CK_INSTANCE;
+	}
 
 	passert(oriented(*d));
 	if (peer_addr != NULL) {

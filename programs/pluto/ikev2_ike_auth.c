@@ -384,6 +384,13 @@ static stf_status ikev2_in_IKE_SA_INIT_R_or_IKE_INTERMEDIATE_R_out_IKE_AUTH_I_si
 		return STF_INTERNAL_ERROR;
 	}
 
+	if (LIN(POLICY_MOBIKE, ike->sa.st_connection->policy)) {
+		ike->sa.st_ike_sent_v2n_mobike_supported = true;
+		if (!emit_v2N(v2N_MOBIKE_SUPPORTED, &sk.pbs)) {
+			return STF_INTERNAL_ERROR;
+		}
+	}
+
 	/*
 	 * Now that the AUTH payload is done(?), create and emit the
 	 * child using the first pending connection (or the IKE SA's
@@ -430,17 +437,17 @@ static stf_status ikev2_in_IKE_SA_INIT_R_or_IKE_INTERMEDIATE_R_out_IKE_AUTH_I_si
 				  child->sa.st_serialno, pri_connection(cc, &cib));
 		}
 
+		if (!prep_v2_child_for_request(child)) {
+			return STF_INTERNAL_ERROR;
+		}
+
+		/* XXX: look further down you're seeing double */
 		if (need_v2_configuration_payload(child->sa.st_connection,
 						  ike->sa.hidden_variables.st_nat_traversal)) {
 			if (!emit_v2_child_configuration_payload(child, &sk.pbs)) {
 				return STF_INTERNAL_ERROR;
 			}
 		}
-
-		/* code does not support AH+ESP, which not recommended as per RFC 8247 */
-		struct ipsec_proto_info *proto_info = ikev2_child_sa_proto_info(child, cc->policy);
-		proto_info->our_spi = ikev2_child_sa_spi(&cc->spd, cc->policy, child->sa.st_logger);
-		const chunk_t local_spi = THING_AS_CHUNK(proto_info->our_spi);
 
 		/*
 		 * A CHILD_SA established during an AUTH exchange does
@@ -450,42 +457,9 @@ static stf_status ikev2_in_IKE_SA_INIT_R_or_IKE_INTERMEDIATE_R_out_IKE_AUTH_I_si
 		struct ikev2_proposals *child_proposals =
 			get_v2_ike_auth_child_proposals(cc, "IKE SA initiator emitting ESP/AH proposals",
 							child->sa.st_logger);
-		if (!ikev2_emit_sa_proposals(&sk.pbs, child_proposals, &local_spi)) {
+
+		if (!emit_v2_child_request_payloads(child, child_proposals, &sk.pbs)) {
 			return STF_INTERNAL_ERROR;
-		}
-
-		emit_v2TS_payloads(&sk.pbs, child);
-
-		if ((cc->policy & POLICY_TUNNEL) == LEMPTY) {
-			dbg("Initiator child policy is transport mode, sending v2N_USE_TRANSPORT_MODE");
-			/* In v2, for parent, protoid must be 0 and SPI must be empty */
-			if (!emit_v2N(v2N_USE_TRANSPORT_MODE, &sk.pbs)) {
-				return STF_INTERNAL_ERROR;
-			}
-		} else {
-			dbg("Initiator child policy is tunnel mode, NOT sending v2N_USE_TRANSPORT_MODE");
-		}
-
-		/*
-		 * Propose IPCOMP based on policy.
-		 */
-		if (cc->policy & POLICY_COMPRESS) {
-			if (!emit_v2N_ipcomp_supported(child, &sk.pbs)) {
-				return STF_INTERNAL_ERROR;
-			}
-		}
-
-		if (cc->send_no_esp_tfc) {
-			if (!emit_v2N(v2N_ESP_TFC_PADDING_NOT_SUPPORTED, &sk.pbs)) {
-				return STF_INTERNAL_ERROR;
-			}
-		}
-
-		if (LIN(POLICY_MOBIKE, cc->policy)) {
-			ike->sa.st_ike_sent_v2n_mobike_supported = true;
-			if (!emit_v2N(v2N_MOBIKE_SUPPORTED, &sk.pbs)) {
-				return STF_INTERNAL_ERROR;
-			}
 		}
 
 		/* send CP payloads */
@@ -1238,16 +1212,6 @@ static stf_status process_v2_IKE_AUTH_request_auth_signature_continue(struct ike
 		if (!emit_redirect_notification(shunk1(c->redirect_to), &sk.pbs))
 			return STF_INTERNAL_ERROR;
 		ike->sa.st_sent_redirect = true;	/* mark that we have sent REDIRECT in IKE_AUTH */
-	}
-
-	if (LIN(POLICY_TUNNEL, c->policy) == LEMPTY && ike->sa.st_seen_use_transport) {
-		if (!emit_v2N(v2N_USE_TRANSPORT_MODE, &sk.pbs))
-			return STF_INTERNAL_ERROR;
-	}
-
-	if (c->send_no_esp_tfc) {
-		if (!emit_v2N(v2N_ESP_TFC_PADDING_NOT_SUPPORTED, &sk.pbs))
-			return STF_INTERNAL_ERROR;
 	}
 
 	/* send out the IDr payload */

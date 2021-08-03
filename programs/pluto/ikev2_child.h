@@ -35,17 +35,34 @@ stf_status process_v2_childs_sa_payload(const char *what, struct ike_sa *ike,
 					struct msg_digest *md,
 					bool expect_accepted_proposal);
 
-stf_status emit_v2_child_sa_response_payloads(struct ike_sa *ike,
-					      struct child_sa *child,
-					      struct msg_digest *md,
-					      struct pbs_out *outpbs);
+/*
+ * Work the initiator and responder Child SAs through to being
+ * established.
+ *
+ * XXX: some, but not all the code lies here - there's still random
+ * snipets scattered across IKE_AUTH and CREATE_CHILD_SA, sigh.
+ */
+
+bool prep_v2_child_for_request(struct child_sa *larval_child);
+
+bool emit_v2_child_request_payloads(const struct child_sa *larval_child,
+				    const struct ikev2_proposals *child_proposals,
+				    struct pbs_out *outpbs);
+v2_notification_t process_v2_child_request_payloads(struct ike_sa *ike,
+						    struct child_sa *larval_child,
+						    struct msg_digest *request_md);
+bool emit_v2_child_response_payloads(struct ike_sa *ike,
+				     const struct child_sa *child,
+				     const struct msg_digest *request_md,
+				     struct pbs_out *outpbs);
+v2_notification_t process_v2_child_response_payloads(struct ike_sa *ike,
+						     struct child_sa *larval_child,
+						     struct msg_digest *response_md);
 
 void v2_child_sa_established(struct ike_sa *ike, struct child_sa *child);
 
 v2_notification_t assign_v2_responders_child_client(struct child_sa *child,
 						    struct msg_digest *md);
-v2_notification_t ikev2_process_ts_and_rest(struct ike_sa *ike, struct child_sa *child,
-					    struct msg_digest *md);
 
 v2_notification_t process_v2_IKE_AUTH_response_child_sa_payloads(struct ike_sa *ike,
 								 struct msg_digest *md);
@@ -53,5 +70,15 @@ v2_notification_t process_v2_IKE_AUTH_response_child_sa_payloads(struct ike_sa *
 v2_notification_t process_v2_IKE_AUTH_request_child_sa_payloads(struct ike_sa *ike,
 								struct msg_digest *md,
 								struct pbs_out *sk_pbs);
+
+#define ikev2_child_sa_proto_info(SA)					\
+	({								\
+		typeof(SA) sa_ = (SA); /* evaluate once */		\
+		lset_t p_ = (sa_->sa.st_connection->policy &		\
+			     (POLICY_ENCRYPT | POLICY_AUTHENTICATE));	\
+		(p_ == POLICY_ENCRYPT ? &sa_->sa.st_esp :		\
+		 p_ == POLICY_AUTHENTICATE ? &sa_->sa.st_ah :		\
+		 NULL);							\
+	})
 
 #endif

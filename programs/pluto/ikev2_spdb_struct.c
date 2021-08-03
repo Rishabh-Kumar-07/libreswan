@@ -1490,10 +1490,11 @@ static int walk_transforms(pb_stream *proposal_pbs, int nr_trans,
 static bool emit_proposal(struct pbs_out *sa_pbs,
 			  const struct ikev2_proposal *proposal,
 			  unsigned propnum,
-			  const chunk_t *local_spi,
+			  shunk_t local_spi,
 			  enum ikev2_last_proposal last_proposal,
 			  bool allow_single_transform_none)
 {
+	diag_t d;
 	int numtrans = walk_transforms(NULL, -1, proposal, propnum,
 				       allow_single_transform_none, sa_pbs->outs_logger);
 	if (numtrans < 0) {
@@ -1504,7 +1505,7 @@ static bool emit_proposal(struct pbs_out *sa_pbs,
 		.isap_lp = last_proposal,
 		.isap_propnum = propnum,
 		.isap_protoid = proposal->protoid,
-		.isap_spisize = (local_spi != NULL ? local_spi->len : 0),
+		.isap_spisize = local_spi.len,
 		.isap_numtrans = numtrans,
 	};
 
@@ -1513,11 +1514,13 @@ static bool emit_proposal(struct pbs_out *sa_pbs,
 		return false;
 	}
 
-	if (local_spi != NULL) {
-		pexpect(local_spi->len > 0);
-		pexpect(local_spi->len == proto_spi_size(proposal->protoid));
-		if (!out_hunk(*local_spi, &proposal_pbs, "our spi"))
-			return FALSE;
+	if (local_spi.len > 0) {
+		pexpect(local_spi.len == proto_spi_size(proposal->protoid));
+		d = pbs_out_hunk(&proposal_pbs, local_spi, "our spi");
+		if (d != NULL) {
+			llog_diag(RC_LOG_SERIOUS, sa_pbs->outs_logger, &d, "%s", "");
+			return false;
+		}
 	}
 
 	if (walk_transforms(&proposal_pbs, numtrans, proposal, propnum,
@@ -1531,7 +1534,7 @@ static bool emit_proposal(struct pbs_out *sa_pbs,
 
 bool ikev2_emit_sa_proposals(struct pbs_out *pbs,
 			     const struct ikev2_proposals *proposals,
-			     const chunk_t *local_spi)
+			     const shunk_t local_spi)
 {
 	dbg("Emitting ikev2_proposals ...");
 
@@ -1565,7 +1568,7 @@ bool ikev2_emit_sa_proposals(struct pbs_out *pbs,
 
 bool ikev2_emit_sa_proposal(pb_stream *pbs,
 			    const struct ikev2_proposal *proposal,
-			    const chunk_t *local_spi)
+			    shunk_t local_spi)
 {
 	dbg("emitting ikev2_proposal ...");
 	passert(pbs != NULL);
@@ -2230,39 +2233,6 @@ struct ikev2_proposals *get_v2_create_child_proposals(struct connection *c, cons
 	return get_v2_child_proposals(&c->v2_create_child_proposals, c, why,
 				      c->v2_create_child_proposals_default_dh,
 				      logger);
-}
-
-struct ipsec_proto_info *ikev2_child_sa_proto_info(struct child_sa *child, lset_t policy)
-{
-	/* ??? this code won't support AH + ESP */
-	switch (policy & (POLICY_ENCRYPT | POLICY_AUTHENTICATE)) {
-	case POLICY_ENCRYPT:
-		return &child->sa.st_esp;
-	case POLICY_AUTHENTICATE:
-		return &child->sa.st_ah;
-	default:
-		bad_case(policy);
-	}
-}
-
-ipsec_spi_t ikev2_child_sa_spi(const struct spd_route *spd_route, lset_t policy,
-			       struct logger *logger)
-{
-	const struct ip_protocol *ipprotoid;
-	switch (policy & (POLICY_ENCRYPT | POLICY_AUTHENTICATE)) {
-	case POLICY_ENCRYPT:
-		ipprotoid = &ip_protocol_esp;
-		break;
-	case POLICY_AUTHENTICATE:
-		ipprotoid = &ip_protocol_ah;
-		break;
-	default:
-		bad_case(policy);
-	}
-	return get_ipsec_spi(0 /* avoid this # */,
-			     ipprotoid, spd_route,
-			     true /* tunnel */,
-			     logger);
 }
 
 /*
