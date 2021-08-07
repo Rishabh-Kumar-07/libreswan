@@ -185,7 +185,7 @@ static void ipsecconf_default_values(struct starter_config *cfg)
 		POLICY_ESN_NO;      	     /* esn=no */
 
 	d->sighash_policy =
-		POL_SIGHASH_SHA2_256 | POL_SIGHASH_SHA2_384 | POL_SIGHASH_SHA2_512;
+		POL_SIGHASH_SHA2_256 | POL_SIGHASH_SHA2_384 | POL_SIGHASH_SHA2_512| POL_SIGHASH_IDENTITY;
 
 	d->left.host_family = &ipv4_info;
 	d->left.addr = ipv4_info.address.any;

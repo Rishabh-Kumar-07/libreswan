@@ -185,6 +185,19 @@ const struct hash_desc ike_alg_hash_sha2_384 = {
 	.hash_asn1_blob_ecdsa = THING_AS_HUNK(asn1_blob_ecdsa_sha2_384),
 };
 
+const struct hash_desc ike_alg_hash_identity = {
+	.common = {
+		.fqn = "IDENTITY_HASH",
+		.names = "IDENTITY_HASH",
+		.algo_type = IKE_ALG_HASH,
+		.id = {
+			[IKEv2_ALG_ID] =  IKEv2_HASH_ALGORITHM_IDENTITY,
+		},
+		.fips = false,
+	},
+
+};
+
 const struct prf_desc ike_alg_prf_sha2_384 = {
 	.common = {
 		.fqn = "HMAC_SHA2_384",
