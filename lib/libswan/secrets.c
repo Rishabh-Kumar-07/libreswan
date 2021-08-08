@@ -42,6 +42,12 @@
 #include <cert.h>
 #include <cryptohi.h>
 #include <keyhi.h>
+#include <secport.h>
+#include <prinit.h>
+#include <prmem.h>
+#include <keythi.h>
+#include <seccomon.h>
+#include <secerr.h>
 
 #include "lswglob.h"
 #include "sysdep.h"
@@ -78,6 +84,39 @@
  * @param ... strings
  * @return err_t
  */
+
+ ECPointEncoding pk11_ECGetPubkeyEncoding(const SECKEYPublicKey *pubKey);
+ ECPointEncoding
+  pk11_ECGetPubkeyEncoding(const SECKEYPublicKey *pubKey)
+  {
+      SECItem oid;
+      SECStatus rv;
+      PORTCheapArenaPool tmpArena;
+      ECPointEncoding encoding = ECPoint_Undefined;
+
+      PORT_InitCheapArena(&tmpArena, DER_DEFAULT_CHUNKSIZE);
+
+      /* decode the OID tag */
+      rv = SEC_QuickDERDecodeItem(&tmpArena.arena, &oid,
+                                  SEC_ASN1_GET(SEC_ObjectIDTemplate),
+                                  &pubKey->u.ec.DEREncodedParams);
+      if (rv == SECSuccess) {
+          SECOidTag tag = SECOID_FindOIDTag(&oid);
+          switch (tag) {
+              case SEC_OID_CURVE25519:
+                  encoding = ECPoint_XOnly;
+                  break;
+              case SEC_OID_SECG_EC_SECP256R1:
+              case SEC_OID_SECG_EC_SECP384R1:
+              case SEC_OID_SECG_EC_SECP521R1:
+              default:
+                  /* unknown curve, default to uncompressed */
+                  encoding = ECPoint_Uncompressed;
+          }
+      }
+      PORT_DestroyCheapArena(&tmpArena);
+      return encoding;
+  }
 
 static err_t builddiag(const char *fmt, ...) PRINTF_LIKE(1);	/* NOT RE-ENTRANT */
 static err_t builddiag(const char *fmt, ...)
@@ -430,7 +469,7 @@ static err_t EC_secret_sane(struct private_key_stuff *pks_unused UNUSED)
 	return NULL;
 }
 
-static struct hash_signature ECDSA_sign_hash(const struct private_key_stuff *pks,
+static struct hash_signature EC_sign_hash(const struct private_key_stuff *pks,
 					     const uint8_t *hash_val, size_t hash_len,
 					     const struct hash_desc *hash_algo_unused UNUSED,
 					     struct logger *logger)
@@ -500,15 +539,30 @@ const struct pubkey_type pubkey_type_ecdsa = {
 	.extract_private_key_pubkey_content = EC_extract_private_key_pubkey_content,
 	.free_secret_content = EC_free_secret_content,
 	.secret_sane = EC_secret_sane,
-	.sign_hash = ECDSA_sign_hash,
+	.sign_hash = EC_sign_hash,
 	.extract_pubkey_content = EC_extract_pubkey_content,
 };
+
+const struct pubkey_type pubkey_type_eddsa = {
+	.alg = PUBKEY_ALG_EDDSA,
+	.name = "EDDSA",
+	.private_key_kind = PKK_EC,
+	.unpack_pubkey_content = EC_unpack_pubkey_content,
+	.free_pubkey_content = EC_free_pubkey_content,
+	.extract_private_key_pubkey_content = EC_extract_private_key_pubkey_content,
+	.free_secret_content = EC_free_secret_content,
+	.secret_sane = EC_secret_sane,
+	.sign_hash = EC_sign_hash,
+	.extract_pubkey_content = EC_extract_pubkey_content,
+};
+
 
 const struct pubkey_type *pubkey_alg_type(enum pubkey_alg alg)
 {
 	static const struct pubkey_type *pubkey_types[] = {
 		[PUBKEY_ALG_RSA] = &pubkey_type_rsa,
 		[PUBKEY_ALG_ECDSA] = &pubkey_type_ecdsa,
+		[PUBKEY_ALG_EDDSA] = &pubkey_type_eddsa,
 	};
 	passert(alg < elemsof(pubkey_types));
 	const struct pubkey_type *type = pubkey_types[alg];
@@ -527,6 +581,7 @@ const keyid_t *pubkey_keyid(const struct pubkey *pk)
 	switch (pk->type->alg) {
 	case PUBKEY_ALG_RSA:
 	case PUBKEY_ALG_ECDSA:
+	case PUBKEY_ALG_EDDSA:
 		return &pk->keyid;
 	default:
 		bad_case(pk->type->alg);
@@ -554,6 +609,7 @@ const keyid_t *secret_keyid(const struct secret *secret)
 		switch (secret->pks.pubkey_type->alg) {
 		case PUBKEY_ALG_RSA:
 		case PUBKEY_ALG_ECDSA:
+		case PUBKEY_ALG_EDDSA:
 			return &secret->pks.keyid;
 		default:
 			bad_case(secret->pks.pubkey_type->alg);
@@ -568,6 +624,7 @@ unsigned pubkey_size(const struct pubkey *pk)
 	switch (pk->type->alg) {
 	case PUBKEY_ALG_RSA:
 	case PUBKEY_ALG_ECDSA:
+	case PUBKEY_ALG_EDDSA:
 		return pk->size;
 	default:
 		bad_case(pk->type->alg);
@@ -1703,7 +1760,10 @@ static const struct pubkey_type *pubkey_type_nss(SECKEYPublicKey *pubk)
 	case rsaKey:
 		return &pubkey_type_rsa;
 	case ecKey:
-		return &pubkey_type_ecdsa;
+	    if (pk11_ECGetPubkeyEncoding(pubk) == ECPoint_XOnly)
+            return &pubkey_type_eddsa;
+        else
+            return &pubkey_type_ecdsa;
 	default:
 		return NULL;
 	}
@@ -1716,7 +1776,13 @@ static const struct pubkey_type *private_key_type_nss(SECKEYPrivateKey *private_
 	case rsaKey:
 		return &pubkey_type_rsa;
 	case ecKey:
-		return &pubkey_type_ecdsa;
+	    SECKEYPublicKey *pubk = SECKEY_ConvertToPublicKey(private_key);
+	    if(pubk == NULL)
+	        return NULL;
+	    if (pk11_ECGetPubkeyEncoding(pubk) == ECPoint_XOnly)
+	        return &pubkey_type_eddsa;
+	    else
+	        return &pubkey_type_ecdsa;
 	default:
 		return NULL;
 	}

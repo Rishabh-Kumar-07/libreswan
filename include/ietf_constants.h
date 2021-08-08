@@ -1658,6 +1658,7 @@ enum pubkey_alg {
 	PUBKEY_ALG_DSA = 1,
 	PUBKEY_ALG_RSA = 2,
 	PUBKEY_ALG_ECDSA = 3,
+	PUBKEY_ALG_EDDSA = 4,
 };
 
 /*
