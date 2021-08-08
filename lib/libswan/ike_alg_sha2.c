@@ -185,7 +185,7 @@ const struct hash_desc ike_alg_hash_sha2_384 = {
 	.hash_asn1_blob_ecdsa = THING_AS_HUNK(asn1_blob_ecdsa_sha2_384),
 };
 
-static const uint8_t asn1_blob_ecdsa_identity[] = { LEN_EDDSA_IDENTITY_BLOB, EDDSA_IDENTITY_BLOB };
+static const uint8_t asn1_blob_eddsa_identity[] = { LEN_EDDSA_IDENTITY_BLOB, EDDSA_IDENTITY_BLOB };
 
 const struct hash_desc ike_alg_hash_identity = {
 	.common = {
