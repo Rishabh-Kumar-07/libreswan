@@ -1648,6 +1648,7 @@ static bool extract_connection(const struct whack_message *wm,
 		if ((wm->left.authby == AUTHBY_NULL && wm->right.authby == AUTHBY_ECDSA) ||
 		    (wm->left.authby == AUTHBY_ECDSA && wm->right.authby == AUTHBY_NULL)) {
 			c->policy |= POLICY_ECDSA;
+		}
 		if ((wm->left.authby == AUTHBY_NULL && wm->right.authby == AUTHBY_EDDSA) ||
 		    (wm->left.authby == AUTHBY_EDDSA && wm->right.authby == AUTHBY_NULL)) {
 			c->policy |= POLICY_EDDSA;
