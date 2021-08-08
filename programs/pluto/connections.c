@@ -1573,18 +1573,18 @@ static bool extract_connection(const struct whack_message *wm,
 	c->policy = wm->policy;
 	/* ignore IKEv2 ECDSA and legacy RSA policies for IKEv1 connections */
 	if (c->ike_version == IKEv1)
-		c->policy = (c->policy & ~(POLICY_EDDSA |POLICY_ECDSA | POLICY_RSASIG_v1_5));
+		c->policy = (c->policy & ~(POLICY_EDDSA | (POLICY_ECDSA | POLICY_RSASIG_v1_5)));
 	/* ignore symmetrical defaults if we got left/rightauth */
 	if (wm->left.authby != wm->right.authby)
 		c->policy = c->policy & ~POLICY_ID_AUTH_MASK;
 	/* remove default pubkey policy if left/rightauth is specified */
 	if (wm->left.authby == wm->right.authby) {
 		if (wm->left.authby == AUTHBY_RSASIG)
-			c->policy = (c->policy & ~(POLICY_EDDSA |POLICY_ECDSA));
+			c->policy = (c->policy & ~(POLICY_EDDSA | POLICY_ECDSA));
 		if (wm->left.authby == AUTHBY_ECDSA)
-			c->policy = (c->policy & ~(POLICY_EDDSA | POLICY_RSASIG | POLICY_RSASIG_v1_5));
+			c->policy = (c->policy & ~(POLICY_EDDSA | (POLICY_RSASIG | POLICY_RSASIG_v1_5)));
 		if (wm->left.authby == AUTHBY_EDDSA)
-			c->policy = (c->policy & ~(POLICY_ECDSA | POLICY_RSASIG | POLICY_RSASIG_v1_5));
+			c->policy = (c->policy & ~(POLICY_ECDSA | (POLICY_RSASIG | POLICY_RSASIG_v1_5)));
 	}
 	/* ignore supplied sighash and ECDSA (from defaults) for IKEv1 */
 	if (c->ike_version == IKEv2)
