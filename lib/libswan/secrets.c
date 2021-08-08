@@ -1760,7 +1760,7 @@ static const struct pubkey_type *pubkey_type_nss(SECKEYPublicKey *pubk)
 	case rsaKey:
 		return &pubkey_type_rsa;
 	case ecKey:
-	    if (pk11_ECGetPubkeyEncoding(pubKey) == ECPoint_XOnly)
+	    if (pk11_ECGetPubkeyEncoding(pubk) == ECPoint_XOnly)
             return &pubkey_type_eddsa;
         else
             return &pubkey_type_ecdsa;
@@ -1779,7 +1779,7 @@ static const struct pubkey_type *private_key_type_nss(SECKEYPrivateKey *private_
 	    SECKEYPublicKey *pubk = SECKEY_ConvertToPublicKey(private_key);
 	    if(pubk == NULL)
 	        return NULL;
-	    if (pk11_ECGetPubkeyEncoding(pubKey) == ECPoint_XOnly)
+	    if (pk11_ECGetPubkeyEncoding(pubk) == ECPoint_XOnly)
 	        return &pubkey_type_eddsa;
 	    else
 	        return &pubkey_type_ecdsa;
