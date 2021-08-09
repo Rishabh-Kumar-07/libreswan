@@ -228,7 +228,7 @@ static const char *const stf_status_strings[] = {
 	A(STF_SUSPEND),
 	A(STF_OK),
 	A(STF_INTERNAL_ERROR),
-	A(STF_V2_DELETE_EXCHANGE_INITIATOR_IKE_SA),
+	A(STF_V2_DELETE_IKE_AUTH_INITIATOR),
 	A(STF_FATAL),
 	A(STF_FAIL),
 #undef A
@@ -398,7 +398,7 @@ enum_names v1_sa_type_names = {
 
 static const char *const v2_sa_type_name[] = {
 	[IKE_SA] = "IKE SA",
-	[IPSEC_SA] = "CHILD SA"
+	[IPSEC_SA] = "Child SA"
 };
 
 enum_names v2_sa_type_names = {

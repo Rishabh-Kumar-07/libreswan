@@ -54,6 +54,7 @@
 
 #include "defs.h"
 #include "connections.h" /* needs id.h */
+#include "connection_db.h"
 #include "pending.h"
 #include "foodgroups.h"
 #include "packet.h"
@@ -277,6 +278,12 @@ static void discard_connection(struct connection **cp, bool connection_valid)
 
 	remove_connection_from_db(c);
 
+	if (c->root_config != NULL) {
+		passert(co_serial_is_unset(c->serial_from));
+		free_chunk_content(&c->root_config->sec_label);
+		pfree(c->root_config);
+	}
+
 	pfree(c);
 	free_logger(&connection_logger, HERE);
 }
@@ -368,17 +375,17 @@ void update_ends_from_this_host_addr(struct end *this, struct end *that)
 	const struct ip_info *afi = address_type(&this->host_addr);
 	if (afi == NULL) {
 		dbg("%s.host_addr's address family is unknown; skipping default_end()",
-		    this->leftright);
+		    this->config->leftright);
 		return;
 	}
 
 	if (address_is_any(this->host_addr)) {
 		dbg("%s.host_addr's is %%any; skipping default_end()",
-		    this->leftright);
+		    this->config->leftright);
 		return;
 	}
 
-	dbg("updating connection from %s.host_addr", this->leftright);
+	dbg("updating connection from %s.host_addr", this->config->leftright);
 
 	/* Default ID to IP (but only if not NO_IP -- WildCard) */
 	if (this->id.kind == ID_NONE && address_is_specified(this->host_addr)) {
@@ -393,7 +400,7 @@ void update_ends_from_this_host_addr(struct end *this, struct end *that)
 		that->host_nexthop = this->host_addr;
 		address_buf ab;
 		dbg("%s host_nexthop %s",
-		    that->leftright, str_address(&that->host_nexthop, &ab));
+		    that->config->leftright, str_address(&that->host_nexthop, &ab));
 	}
 
 	/*
@@ -402,7 +409,7 @@ void update_ends_from_this_host_addr(struct end *this, struct end *that)
 	 * NAT port (and also ESP=0 prefix messages).
 	 */
 	unsigned host_port = hport(end_host_port(this, that));
-	dbg("%s() %s.host_port: %u->%u", __func__, this->leftright,
+	dbg("%s() %s.host_port: %u->%u", __func__, this->config->leftright,
 	    this->host_port, host_port);
 	this->host_port = host_port;
 
@@ -698,11 +705,13 @@ void unshare_connection_end(struct end *e)
  * XXX: unshare_connection() and the shallow clone should be merged
  * into a routine that allocates a new connection and then explicitly
  * copy over the data.  Cloning pointers and then trying to fix them
- * up after the event, a guaranteed way to create use-after-free
+ * up after the event is a guaranteed way to create use-after-free
  * problems.
  */
 static void unshare_connection(struct connection *c)
 {
+	c->root_config = NULL;
+
 	c->foodgroup = clone_str(c->foodgroup, "connection foodgroup");
 
 	c->modecfg_dns = clone_str(c->modecfg_dns,
@@ -743,49 +752,14 @@ static void unshare_connection(struct connection *c)
 }
 
 static int extract_end(struct connection *c,
+		       struct end *dst,
+		       struct config_end *config_end,
 		       const struct whack_end *src,
-		       enum left_right end_index,
+		       struct end *other_end,
 		       struct logger *logger/*connection "..."*/)
 {
-	/*
-	 * Since at this point 'this' and 'that' are disoriented their
-	 * names are pretty much meaningless.  Hence the strange
-	 * combination if 'this' and 'left' and 'that' and 'right.
-	 *
-	 * XXX: This is all too confusing - wouldn't it be simpler if
-	 * there was a '.left' and '.right' (or even .end[2] - this
-	 * code seems to be crying out for a for loop) and then having
-	 * orient() set up .local and .remote pointers or indexes
-	 * accordingly?
-	 */
-
-	struct config_end *config = &c->config[end_index];
-	config->end_index = end_index;
-	struct end *dst;
-	struct end *other_end;
-	const char *leftright;
-	switch (end_index) {
-	case LEFT_END:
-		/* start with: LEFT == LOCAL == THIS */
-		leftright = "left";
-		dst = &c->spd.this;
-		other_end = &c->spd.that;
-		c->local = config;
-		break;
-	case RIGHT_END:
-		/* start with: RIGHT == REMOTE == THAT */
-		leftright = "right";
-		dst = &c->spd.that;
-		other_end = &c->spd.this;
-		c->remote = config;
-		break;
-	default:
-		bad_case(end_index);
-	}
-	dst->config = config;
-	dst->leftright = leftright;
-	config->end_name = leftright;
-
+	passert(dst->config == config_end);
+	const char *leftright = dst->config->leftright;
 	bool same_ca = 0;
 
 	/*
@@ -803,16 +777,6 @@ static int extract_end(struct connection *c,
 		 * and for @string ID's all chars are valid without processing.
 		 */
 		atoid(src->id, &dst->id);
-	}
-
-	if (src->sec_label != NULL) {
-		dst->sec_label = clone_bytes_as_chunk(src->sec_label, strlen(src->sec_label)+1, "struct end sec_label");
-		dbg("received sec_label '%s' from whack", src->sec_label);
-		err_t ugh = vet_seclabel(HUNK_AS_SHUNK(dst->sec_label));
-		if (ugh != NULL) {
-			llog(RC_LOG, logger, "bad %s; ignored", ugh);
-			dst->sec_label = empty_chunk;
-		}
 	}
 
 	/* decode CA distinguished name, if any */
@@ -856,20 +820,20 @@ static int extract_end(struct connection *c,
 		if (src->ckaid != NULL) {
 			llog(RC_LOG, logger,
 				    "warning: ignoring %s ckaid '%s' and using %s certificate '%s'",
-				    dst->leftright, src->cert,
-				    dst->leftright, src->cert);
+				    leftright, src->cert,
+				    leftright, src->cert);
 		}
 		if (src->rsasigkey != NULL) {
 			llog(RC_LOG, logger,
 				    "warning: ignoring %s rsasigkey '%s' and using %s certificate '%s'",
-				    dst->leftright, src->cert,
-				    dst->leftright, src->cert);
+				    leftright, src->cert,
+				    leftright, src->cert);
 		}
 		CERTCertificate *cert = get_cert_by_nickname_from_nss(src->cert, logger);
 		if (cert == NULL) {
 			llog(RC_FATAL, logger,
 				    "failed to add connection: %s certificate '%s' not found in the NSS database",
-				    dst->leftright, src->cert);
+				    leftright, src->cert);
 			return -1; /* fatal */
 		}
 		diag_t diag = add_end_cert_and_preload_private_key(cert, dst,
@@ -884,7 +848,7 @@ static int extract_end(struct connection *c,
 		if (src->ckaid != NULL) {
 			llog(RC_LOG, logger,
 				    "warning: ignoring %s ckaid '%s' and using %s rsasigkey",
-				    dst->leftright, src->ckaid, dst->leftright);
+				    leftright, src->ckaid, leftright);
 		}
 		/*
 		 * XXX: hack: whack will load the rsasigkey in a
@@ -909,12 +873,12 @@ static int extract_end(struct connection *c,
 		if (err != NULL) {
 			llog(RC_FATAL, logger,
 				    "failed to add connection: %s raw public key invalid: %s",
-				    dst->leftright, err);
+				    leftright, err);
 			return -1;
 		}
 		ckaid_buf ckb;
 		dbg("saving %s CKAID %s extracted from raw %s public key",
-		    dst->leftright, str_ckaid(&ckaid, &ckb), type->name);
+		    leftright, str_ckaid(&ckaid, &ckb), type->name);
 		dst->ckaid = clone_const_thing(ckaid, "raw pubkey's ckaid");
 		type->free_pubkey_content(&pkc);
 		/* try to pre-load the private key */
@@ -923,12 +887,12 @@ static int extract_end(struct connection *c,
 		if (err != NULL) {
 			ckaid_buf ckb;
 			dbg("no private key matching %s CKAID %s: %s",
-			    dst->leftright, str_ckaid(dst->ckaid, &ckb), err);
+			    leftright, str_ckaid(dst->ckaid, &ckb), err);
 		} else if (load_needed) {
 			ckaid_buf ckb;
 			llog(RC_LOG|LOG_STREAM/*not-whack-for-now*/, logger,
 				    "loaded private key matching %s CKAID %s",
-				    dst->leftright, str_ckaid(dst->ckaid, &ckb));
+				    leftright, str_ckaid(dst->ckaid, &ckb));
 		}
 	} else if (src->ckaid != NULL) {
 		ckaid_t ckaid;
@@ -938,7 +902,7 @@ static int extract_end(struct connection *c,
 			/* XXX: don't trust whack */
 			llog(RC_FATAL, logger,
 				    "failed to add connection: %s CKAID '%s' invalid: %s",
-				    dst->leftright, src->ckaid, err);
+				    leftright, src->ckaid, err);
 			return -1; /* fatal */
 		}
 		/*
@@ -962,19 +926,19 @@ static int extract_end(struct connection *c,
 			}
 		} else {
 			dbg("%s CKAID '%s' did not match a certificate in the NSS database",
-			    dst->leftright, src->ckaid);
+			    leftright, src->ckaid);
 			/* try to pre-load the private key */
 			bool load_needed;
 			err_t err = preload_private_key_by_ckaid(&ckaid, &load_needed, logger);
 			if (err != NULL) {
 				ckaid_buf ckb;
 				dbg("no private key matching %s CKAID %s: %s",
-				    dst->leftright, str_ckaid(dst->ckaid, &ckb), err);
+				    leftright, str_ckaid(dst->ckaid, &ckb), err);
 			} else {
 				ckaid_buf ckb;
 				llog(RC_LOG|LOG_STREAM/*not-whack-for-now*/, logger,
 					    "loaded private key matching %s CKAID %s",
-					    dst->leftright, str_ckaid(dst->ckaid, &ckb));
+					    leftright, str_ckaid(dst->ckaid, &ckb));
 			}
 		}
 	}
@@ -1000,8 +964,8 @@ static int extract_end(struct connection *c,
 	dst->authby = src->authby;
 
 	/* save some defaults */
-	config->client.subnet = src->client;
-	config->client.protoport = src->protoport;
+	config_end->client.subnet = src->client;
+	config_end->client.protoport = src->protoport;
 
 	/*
 	 * .has_client means that .client contains a hardwired value,
@@ -1026,12 +990,12 @@ static int extract_end(struct connection *c,
 	dst->updown = clone_str(src->updown, "updown");
 	dst->sendcert =  src->sendcert;
 
-	config->host.ikeport = src->host_ikeport;
+	config_end->host.ikeport = src->host_ikeport;
 	if (src->host_ikeport > 65535) {
 		llog(RC_BADID, logger,
 			    "%sikeport=%u must be between 1..65535, ignored",
 			    leftright, src->host_ikeport);
-		config->host.ikeport = 0;
+		config_end->host.ikeport = 0;
 	}
 
 	/*
@@ -1185,6 +1149,7 @@ diag_t add_end_cert_and_preload_private_key(CERTCertificate *cert,
 	passert(cert != NULL);
 	dst_end->cert.nss_cert = NULL;
 	const char *nickname = cert->nickname;
+	const char *leftright = dst_end->config->leftright;
 
 	/*
 	 * A copy of this code lives in nss_cert_verify.c :/
@@ -1200,7 +1165,7 @@ diag_t add_end_cert_and_preload_private_key(CERTCertificate *cert,
 		    ((pk->u.rsa.modulus.len * BITS_PER_BYTE) < FIPS_MIN_RSA_KEY_SIZE)) {
 			SECKEY_DestroyPublicKey(pk);
 			return diag("FIPS: rejecting %s certificate '%s' with key size %d which is under %d",
-				    dst_end->leftright, nickname,
+				    leftright, nickname,
 				    pk->u.rsa.modulus.len * BITS_PER_BYTE,
 				    FIPS_MIN_RSA_KEY_SIZE);
 		}
@@ -1215,14 +1180,14 @@ diag_t add_end_cert_and_preload_private_key(CERTCertificate *cert,
 	if (CERT_CheckCertValidTimes(cert, PR_Now(), FALSE) !=
 			secCertTimeValid) {
 		return diag("%s certificate '%s' is expired or not yet valid",
-			    dst_end->leftright, nickname);
+			    leftright, nickname);
 	}
 
-	dbg("loading %s certificate \'%s\' pubkey", dst_end->leftright, nickname);
+	dbg("loading %s certificate \'%s\' pubkey", leftright, nickname);
 	if (!add_pubkey_from_nss_cert(&pluto_pubkeys, &dst_end->id, cert, logger)) {
 		/* XXX: push diag_t into add_pubkey_from_nss_cert()? */
 		return diag("%s certificate \'%s\' pubkey could not be loaded",
-			    dst_end->leftright, nickname);
+			    leftright, nickname);
 	}
 
 	dst_end->cert.nss_cert = cert;
@@ -1233,7 +1198,7 @@ diag_t add_end_cert_and_preload_private_key(CERTCertificate *cert,
 	 *
 	 */
 	if (preserve_ca || dst_end->ca.ptr != NULL) {
-		dbg("preserving existing %s ca", dst_end->leftright);
+		dbg("preserving existing %s ca", leftright);
 	} else {
 		dst_end->ca = clone_secitem_as_chunk(cert->derIssuer, "issuer ca");
 	}
@@ -1254,11 +1219,11 @@ diag_t add_end_cert_and_preload_private_key(CERTCertificate *cert,
 	err_t ugh = preload_private_key_by_cert(&dst_end->cert, &load_needed, logger);
 	if (ugh != NULL) {
 		dbg("no private key matching %s certificate %s: %s",
-		    dst_end->leftright, nickname, ugh);
+		    leftright, nickname, ugh);
 	} else if (load_needed) {
 		llog(RC_LOG|LOG_STREAM/*not-whack-for-now*/, logger,
-			    "loaded private key matching %s certificate '%s'",
-			    dst_end->leftright, nickname);
+		     "loaded private key matching %s certificate '%s'",
+		     leftright, nickname);
 	}
 	return NULL;
 }
@@ -1336,6 +1301,10 @@ static bool extract_connection(const struct whack_message *wm,
 			       struct connection *c)
 {
 	diag_t d;
+
+	struct config *config = alloc_thing(struct config, "root config");
+	c->root_config = config; /* writeable; root only */
+	c->config = config; /* read only; shared */
 
 	passert(c->name != NULL); /* see alloc_connection() */
 	if (conn_by_name(wm->name, false/*!strict*/) != NULL) {
@@ -1887,20 +1856,51 @@ static bool extract_connection(const struct whack_message *wm,
 	 */
 	c->sa_reqid = (wm->sa_reqid != 0 ? wm->sa_reqid :
 		       wm->ike_version != IKEv2 ? /*generated later*/0 :
-		       wm->left.sec_label != NULL ? gen_reqid() :
-		       wm->right.sec_label != NULL ? gen_reqid() :
+		       wm->sec_label != NULL ? gen_reqid() :
 		       /*generated later*/0);
 	dbg("%s c->sa_reqid=%d because wm->sa_reqid=%d and sec-label=%s",
 	    c->name, c->sa_reqid, wm->sa_reqid,
 	    (wm->ike_version != IKEv2 ? "not-IKEv2" :
-	     wm->left.sec_label != NULL ? wm->left.sec_label :
-	     wm->right.sec_label != NULL ? wm->right.sec_label :
+	     wm->sec_label != NULL ? wm->sec_label :
 	     "n/a"));
 
 	/*
-	 * Since at this point 'this' and 'that' are disoriented their
-	 * names are pretty much meaningless.  Hence the strange
-	 * combination if 'this' and 'left' and 'that' and 'right.
+	 * Set both end's sec_label to the same value.
+	 */
+
+	if (wm->sec_label != NULL) {
+		dbg("received sec_label '%s' from whack", wm->sec_label);
+		/* include NUL! */
+		shunk_t sec_label = shunk2(wm->sec_label, strlen(wm->sec_label)+1);
+		err_t ugh = vet_seclabel(sec_label);
+		if (ugh != NULL) {
+			llog(RC_LOG_SERIOUS, c->logger, "failed to add connection: %s: policy-label=%s",
+			     ugh, wm->sec_label);
+			return false;
+		}
+		config->sec_label = clone_hunk(sec_label, "struct config sec_label");
+		/* redundant */
+		FOR_EACH_THING(end, &c->spd.this, &c->spd.that) {
+			end->sec_label = clone_hunk(sec_label, "struct end sec_label");
+			/*
+			 * `dst->sec_label` is the `policy-label` from
+			 * ipsec.conf.
+			 */
+			end->has_config_policy_label = true;
+		}
+	}
+
+
+	/*
+	 * At this point THIS and THAT are disoriented so
+	 * distinguishing one as local and the other as remote is
+	 * pretty much meaningless.
+	 *
+	 * Somewhat arbitrarially (as in this is the way it's always
+	 * been) start with:
+	 *
+	 *    LEFT == LOCAL / THIS
+	 *    RIGHT == REMOTE / THAT
 	 *
 	 * XXX: This is all too confusing - wouldn't it be simpler if
 	 * there was a '.left' and '.right' (or even .end[2] - this
@@ -1908,11 +1908,29 @@ static bool extract_connection(const struct whack_message *wm,
 	 * orient() set up .local and .remote pointers or indexes
 	 * accordingly?
 	 */
-	int same_leftca = extract_end(c, &wm->left, LEFT_END, c->logger);
+
+	for (enum left_right end_index = 0; end_index < elemsof(config->end); end_index++) {
+		struct config_end *config_end = &config->end[end_index];
+		config_end->end_index = end_index;
+		config_end->leftright = (end_index == LEFT_END ? "left" :
+					 end_index == RIGHT_END ? "right" :
+					 NULL);
+		passert(config_end->leftright != NULL);
+	}
+
+	struct end *left = &c->spd.this;
+	struct end *right = &c->spd.that;
+	left->config = c->local = &config->end[LEFT_END];
+	right->config = c->remote = &config->end[RIGHT_END];
+
+	int same_leftca = extract_end(c, left, &config->end[LEFT_END], &wm->left,
+				      /*other_end*/right, c->logger);
 	if (same_leftca < 0) {
 		return false;
 	}
-	int same_rightca = extract_end(c, &wm->right, RIGHT_END, c->logger);
+
+	int same_rightca = extract_end(c, right, &config->end[RIGHT_END], &wm->right,
+				       /*other_end*/left, c->logger);
 	if (same_rightca < 0) {
 		return false;
 	}
@@ -2037,8 +2055,9 @@ static bool extract_connection(const struct whack_message *wm,
 	} else if (c->spd.that.has_port_wildcard) {
 		dbg("connection is template: remote has wildcard port");
 		c->kind = CK_TEMPLATE;
-	} else if (c->ike_version == IKEv2 && c->spd.this.sec_label.len > 0) {
-		dbg("connection is template: security label present");
+	} else if (c->ike_version == IKEv2 && c->config->sec_label.len > 0) {
+		dbg("connection is template: has security label: "PRI_SHUNK,
+		    pri_shunk(c->config->sec_label));
 		c->kind = CK_TEMPLATE;
 	} else if (wm->left.virt != NULL || wm->right.virt != NULL) {
 		/*
@@ -2136,9 +2155,9 @@ void add_connection(const struct whack_message *wm, struct logger *logger)
 
 /*
  * Derive a template connection from a group connection and target.
- * Similar to instantiate().  Happens at whack --listen.
- * Returns name of new connection.  NULL on failure (duplicated name).
- * Caller is responsible for pfreeing name.
+ * Similar to instantiate().  Happens at whack --listen.  Returns name
+ * of new connection.  NULL on failure (duplicated name).  Caller is
+ * responsible for pfreeing name.
  */
 struct connection *add_group_instance(struct connection *group,
 				      const ip_selector *target,
@@ -2246,7 +2265,8 @@ struct connection *add_group_instance(struct connection *group,
  */
 struct connection *instantiate(struct connection *c,
 			       const ip_address *peer_addr,
-			       const struct id *peer_id)
+			       const struct id *peer_id,
+			       shunk_t sec_label)
 {
 	passert(c->kind == CK_TEMPLATE);
 	passert(c->spd.spd_next == NULL);
@@ -2263,7 +2283,34 @@ struct connection *instantiate(struct connection *c,
 	}
 	unshare_connection(d);
 
-	d->kind = CK_INSTANCE;
+	if ((c->spd.that.host_type == KH_ANY) /* Wildcard peer IP */ &&
+		(c->spd.this.sec_label.len > 0) /* Security label */ &&
+		c->spd.this.has_config_policy_label /* Label from `policy-label` */) {
+		passert(c->kind == CK_TEMPLATE);
+		/*
+		 * In this case, `c` is a template connection due to _both_:
+		 *  - a peer wildcard IP address (`%any`)
+		 *    and
+		 *  - a security label from the user-specified connection configuration's `policy-label`.
+		 *
+		 * At this point, we are instantiating a connection with an
+		 * actual address but still don' t have the actual security
+		 * label used for network transmission, i.e. this function
+		 * doesn't have access to a label retrieved via Netlink
+		 * `ACQUIRE` or received from the peer. Therefore, the newly
+		 * instantiated connection remains a template since its current
+		 * security label value is the label from `policy-label`.
+		 *
+		 * The caller of this function is expected to update `d->kind`
+		 * to `CK_INSTANCE` if `d` ends up getting a label used for
+		 * network transmission.
+		 *
+		 * And so, let a template beget another template.
+		 */
+		d->kind = CK_TEMPLATE;
+	} else {
+		d->kind = CK_INSTANCE;
+	}
 
 	passert(oriented(*d));
 	if (peer_addr != NULL) {
@@ -2312,6 +2359,23 @@ struct connection *instantiate(struct connection *c,
 	/* assumption: orientation is the same as c's */
 	connect_to_host_pair(d);
 
+	if (sec_label.len > 0) {
+		/*
+		 * Replace connection template sec_label with label
+		 * from either acquire or child payload.
+		 *
+		 * XXX: Note: only replace when SEC_LABEL is valid.
+		 * When SEC_LABEL isn't valid the instance D inherits
+		 * the template's SEC_LABEL (suspect IKEv1 depends on
+		 * this).
+		 */
+		FOR_EACH_THING(end, &d->spd.this, &d->spd.that) {
+			free_chunk_content(&end->sec_label);
+			end->sec_label = clone_hunk(sec_label, "instantiate() sec_label");
+			end->has_config_policy_label = false;
+		}
+	}
+
 	return d;
 }
 
@@ -2320,7 +2384,7 @@ struct connection *rw_instantiate(struct connection *c,
 				  const ip_selector *peer_subnet,
 				  const struct id *peer_id)
 {
-	struct connection *d = instantiate(c, peer_addr, peer_id);
+	struct connection *d = instantiate(c, peer_addr, peer_id, null_shunk);
 
 	if (peer_subnet != NULL && is_virtual_connection(c)) {
 		d->spd.that.client = *peer_subnet;
@@ -2456,8 +2520,8 @@ const char *str_connection_instance(const struct connection *c, connection_buf *
  * Note: result may still need to be instantiated.
  * The winner has the highest policy priority.
  *
- * If there are several with that priority, we give preference to
- * the first one that is an instance.
+ * If there are several with that priority, we give preference to the
+ * first one that is an instance.
  *
  * See also build_outgoing_opportunistic_connection.
  */
@@ -2481,23 +2545,42 @@ struct connection *find_connection_for_clients(struct spd_route **srp,
 	dbg("find_connection: looking for policy for connection: %s",
 	    str_endpoints(local_client, remote_client, &eb));
 
-	struct connection *c;
-
 	dbg("FOR_EACH_CONNECTION_... in %s", __func__);
-	for (c = connections; c != NULL; c = c->ac_next) {
+	for (struct connection *c = connections; c != NULL; c = c->ac_next) {
 		if (c->kind == CK_GROUP)
 			continue;
 
 		/*
-		 * For labeled IPsec, always start with the template.
-		 * Who are we to argue if the kernel asks for a new SA
-		 * with, seemingly, a security label that matches an
-		 * existing connection instance.
+		 * For both IKEv1 and IKEv2 labeled IPsec, don't try
+		 * to mix 'n' match acquire sec_label with
+		 * non-sec_label connection.
 		 */
-		if (c->ike_version == IKEv2 && c->spd.this.sec_label.len > 0 && c->kind != CK_TEMPLATE) {
+		if ((sec_label.len > 0) != (c->config->sec_label.len > 0)) {
+			continue;
+		}
+
+		/*
+		 * For IKEv2 labeled IPsec, always start with the
+		 * template.  Who are we to argue if the kernel asks
+		 * for a new SA with, seemingly, a security label that
+		 * matches an existing connection instance.
+		 */
+		if (c->ike_version == IKEv2 &&
+		    c->config->sec_label.len > 0 &&
+		    c->kind != CK_TEMPLATE) {
+			pexpect(c->kind == CK_INSTANCE);
 			connection_buf cb;
 			dbg("skipping non-template IKEv2 "PRI_CONNECTION" with a security label",
 			    pri_connection(c, &cb));
+			continue;
+		}
+
+		/*
+		 * When there is a sec_label, it needs to be within
+		 * the configuration's range.
+		 */
+		if (sec_label.len > 0 /*implies c->config->sec_label*/ &&
+		    !sec_label_within_range(sec_label, c->config->sec_label, logger)) {
 			continue;
 		}
 
@@ -2512,7 +2595,7 @@ struct connection *find_connection_for_clients(struct spd_route **srp,
 			 */
 			if (!routed(sr->routing) &&
 			    !c->instance_initiation_ok &&
-			    sr->this.sec_label.len == 0) {
+			    c->config->sec_label.len == 0) {
 				continue;
 			}
 
@@ -2522,14 +2605,6 @@ struct connection *find_connection_for_clients(struct spd_route **srp,
 			 */
 			if (!endpoint_in_selector(*local_client, sr->this.client) ||
 			    !endpoint_in_selector(*remote_client, sr->that.client)) {
-				continue;
-			}
-
-			/*
-			 * When there is one, the label needs to be
-			 * within range.
-			 */
-			if (sec_label.len > 0 && !sec_label_within_range(sec_label, sr->this.sec_label, logger)) {
 				continue;
 			}
 
@@ -2613,7 +2688,7 @@ struct connection *oppo_instantiate(struct connection *c,
 	    c->name, enum_name(&routing_story, c->spd.routing),
 	    str_address(local_address, &lb), str_address(remote_address, &rb));
 
-	struct connection *d = instantiate(c, remote_address, remote_id);
+	struct connection *d = instantiate(c, remote_address, remote_id, null_shunk);
 
 	passert(d->spd.spd_next == NULL);
 
@@ -4070,13 +4145,25 @@ static void show_one_sr(struct show *s,
 		c->name, instance, c->modecfg_banner);
 	}
 
-	/* we only support symmetric labels, but store it in struct end - pick one */
-	if (sr->this.sec_label.len == 0)
+	/*
+	 * Show the first valid sec_label.
+	 *
+	 * We only support symmetric labels, but store it in struct
+	 * end - pick one.
+	 *
+	 * XXX: IKEv1 stores the negotiated sec_label in the state.
+	 */
+	if (sr->this.sec_label.len > 0) {
+		/* negotiated (IKEv2) */
+		show_comment(s, "\"%s\"%s:   sec_label:"PRI_SHUNK,
+			     c->name, instance, pri_shunk(sr->this.sec_label));
+	} else if (c->config->sec_label.len > 0) {
+		/* configured */
+		show_comment(s, "\"%s\"%s:   sec_label:"PRI_SHUNK,
+			     c->name, instance, pri_shunk(c->config->sec_label));
+	} else {
 		show_comment(s, "\"%s\"%s:   sec_label:unset;", c->name, instance);
-	else
-		show_comment(s, "\"%s\"%s:   sec_label:%.*s;",
-			c->name, instance,
-			(int)sr->this.sec_label.len, sr->this.sec_label.ptr);
+	}
 }
 
 void show_one_connection(struct show *s,
@@ -4373,7 +4460,7 @@ void connection_delete_unused_instance(struct connection **cp,
 
 	if (LIN(POLICY_UP, c->policy) &&
 	    old_state != NULL && (IS_IKE_SA_ESTABLISHED(old_state) ||
-				  IS_ISAKMP_SA_ESTABLISHED(old_state))) {
+				  IS_V1_ISAKMP_SA_ESTABLISHED(old_state))) {
 		/*
 		 * If this connection instance was previously for an
 		 * established sa planning to revive, don't delete.

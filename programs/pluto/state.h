@@ -133,6 +133,18 @@ struct trans_attrs {
 	const struct dh_desc *ta_dh;	/* Diffie-Helman-Merkel routines */
 };
 
+/*
+ * While a state is being deleted, should a last-gasp delete be sent?
+ *
+ * For instance, when tearing down a connection.
+ */
+
+enum send_delete {
+	PROBABLY_SEND_DELETE,
+	DONT_SEND_DELETE,
+	DO_SEND_DELETE,
+};
+
 /* IPsec (Phase 2 / Quick Mode) transform and attributes
  * This is a flattened/decoded version of what is represented
  * by a Transaction Payload.  There may be one for AH, one
@@ -312,8 +324,8 @@ struct state {
 	so_serial_t st_ike_pred;		/* IKEv2: replacing established IKE SA */
 	so_serial_t st_ipsec_pred;		/* replacing established IPsec SA */
 
-#ifdef AUTH_HAVE_PAM
-	struct pamauth *st_pamauth;		/* per state auth/pam thread */
+#ifdef USE_PAM_AUTH
+	struct pam_auth *st_pam_auth;		/* per state auth/pam thread */
 #endif
 
 	/*
@@ -327,7 +339,7 @@ struct state {
 	/*const*/ enum sa_type st_establishing_sa;	/* where is this state going? */
 
 	bool st_ikev2_anon;                     /* is this an anonymous IKEv2 state? */
-	bool st_dont_send_delete;		/* suppress sending DELETE - eg replaced conn */
+	enum send_delete st_send_delete;	/* suppress or force sending DELETE */
 
 	struct connection *st_connection;       /* connection for this SA */
  	struct logger *st_logger;
@@ -677,11 +689,6 @@ struct state {
 	PK11SymKey *st_sk_d_no_ppk;
 	PK11SymKey *st_sk_pi_no_ppk;
 	PK11SymKey *st_sk_pr_no_ppk;
-
-	/* connection included in AUTH (v2) */
-	struct traffic_selector st_ts_this;
-	struct traffic_selector st_ts_that;
-
 	PK11SymKey *st_enc_key_nss;	/* Oakley Encryption key */
 
 	struct state_event *st_event;		/* timer event for this state object */
@@ -718,8 +725,7 @@ struct state {
 	bool st_seen_hashnotify;		/* did we receive hash algo notification in IKE_INIT, then send in response as well */
 	bool st_v1_seen_fragments;              /* did we receive ike fragments from peer, if so use them in return as well */
 	bool st_seen_no_tfc;			/* did we receive ESP_TFC_PADDING_NOT_SUPPORTED */
-	bool st_seen_use_transport;		/* did we receive USE_TRANSPORT_MODE */
-	bool st_seen_nonats;			/* did we receive NO_NATS_ALLOWED */
+	bool st_seen_and_use_transport_mode;	/* did we receive USE_TRANSPORT_MODE */
 	bool st_seen_redirect_sup;		/* did we receive IKEv2_REDIRECT_SUPPORTED */
 	bool st_sent_redirect;			/* did we send IKEv2_REDIRECT in IKE_AUTH (response) */
 	generalName_t *st_requested_ca;		/* collected certificate requests */
@@ -808,7 +814,6 @@ extern void state_eroute_usage(const ip_selector *ours, const ip_selector *peers
 extern void delete_state(struct state *st);
 extern void delete_states_by_connection(struct connection *c, bool relations);
 extern void rekey_p2states_by_connection(struct connection *c);
-enum send_delete { PROBABLY_SEND_DELETE, DONT_SEND_DELETE, };
 extern void delete_ike_family(struct ike_sa *ike, enum send_delete send_delete);
 
 extern struct state

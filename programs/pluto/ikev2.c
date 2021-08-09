@@ -84,6 +84,8 @@
 #include "ikev2_create_child_sa.h"
 #include "ikev2_ike_intermediate.h"
 #include "ikev2_ike_auth.h"
+#include "ikev2_delete.h"		/* for record_v2_delete() */
+#include "ikev2_child.h"		/* for jam_v2_child_sa_details() */
 
 /*
  * IKEv2 has slightly different states than IKEv1.
@@ -293,7 +295,8 @@ static /*const*/ struct v2_state_transition v2_state_transition_table[] = {
 	{ .story      = "Initiator: process IKE_AUTH response",
 	  .state      = STATE_PARENT_I2,
 	  .next_state = STATE_V2_ESTABLISHED_IKE_SA,
-	  .flags      = SMF2_ESTABLISHED|SMF2_SUPPRESS_SUCCESS_LOG|SMF2_RELEASE_WHACK,
+	  /* logged mid transition */
+	  .flags      = SMF2_SUPPRESS_SUCCESS_LOG|SMF2_RELEASE_WHACK,
 	  .req_clear_payloads = P(SK),
 	  .req_enc_payloads = P(IDr) | P(AUTH),
 	  .opt_enc_payloads = P(CERT) | P(CP) | P(SA) | P(TSi) | P(TSr),
@@ -383,7 +386,7 @@ static /*const*/ struct v2_state_transition v2_state_transition_table[] = {
 	{ .story      = "Responder: process IKE_AUTH request",
 	  .state      = STATE_PARENT_R1,
 	  .next_state = STATE_V2_ESTABLISHED_IKE_SA,
-	  .flags = SMF2_ESTABLISHED,
+	  .flags      = SMF2_SUPPRESS_SUCCESS_LOG|SMF2_RELEASE_WHACK,
 	  .send       = MESSAGE_RESPONSE,
 	  .req_clear_payloads = P(SK),
 	  .req_enc_payloads = P(IDi) | P(AUTH),
@@ -477,7 +480,7 @@ static /*const*/ struct v2_state_transition v2_state_transition_table[] = {
 	{ .story      = "process rekey Child SA request (CREATE_CHILD_SA)",
 	  .state      = STATE_V2_REKEY_CHILD_R0,
 	  .next_state = STATE_V2_ESTABLISHED_CHILD_SA,
-	  .flags      = SMF2_ESTABLISHED | SMF2_RELEASE_WHACK,
+	  .flags      = SMF2_RELEASE_WHACK,
 	  .send       = MESSAGE_RESPONSE,
 	  .message_payloads.required = P(SK),
 	  .encrypted_payloads.required = P(SA) | P(Ni) | P(TSi) | P(TSr),
@@ -491,7 +494,7 @@ static /*const*/ struct v2_state_transition v2_state_transition_table[] = {
 	{ .story      = "process rekey Child SA response (CREATE_CHILD_SA)",
 	  .state      = STATE_V2_REKEY_CHILD_I1,
 	  .next_state = STATE_V2_ESTABLISHED_CHILD_SA,
-	  .flags      = SMF2_ESTABLISHED | SMF2_RELEASE_WHACK,
+	  .flags      = SMF2_RELEASE_WHACK,
 	  .message_payloads.required = P(SK),
 	  .encrypted_payloads.required = P(SA) | P(Ni) | P(TSi) | P(TSr),
 	  .encrypted_payloads.optional = P(KE) | P(N) | P(CP),
@@ -530,7 +533,7 @@ static /*const*/ struct v2_state_transition v2_state_transition_table[] = {
 	{ .story      = "process create Child SA request (CREATE_CHILD_SA)",
 	  .state      = STATE_V2_NEW_CHILD_R0,
 	  .next_state = STATE_V2_ESTABLISHED_CHILD_SA,
-	  .flags      = SMF2_ESTABLISHED | SMF2_RELEASE_WHACK,
+	  .flags      = SMF2_RELEASE_WHACK,
 	  .send       = MESSAGE_RESPONSE,
 	  .req_clear_payloads = P(SK),
 	  .req_enc_payloads = P(SA) | P(Ni) | P(TSi) | P(TSr),
@@ -543,7 +546,7 @@ static /*const*/ struct v2_state_transition v2_state_transition_table[] = {
 	{ .story      = "process create Child SA response (CREATE_CHILD_SA)",
 	  .state      = STATE_V2_NEW_CHILD_I1,
 	  .next_state = STATE_V2_ESTABLISHED_CHILD_SA,
-	  .flags      = SMF2_ESTABLISHED | SMF2_RELEASE_WHACK,
+	  .flags      = SMF2_RELEASE_WHACK,
 	  .req_clear_payloads = P(SK),
 	  .req_enc_payloads = P(SA) | P(Ni) | P(TSi) | P(TSr),
 	  .opt_enc_payloads = P(KE) | P(N) | P(CP),
@@ -2101,7 +2104,6 @@ void v2_dispatch(struct ike_sa *ike, struct state *st,
 		 struct msg_digest *md,
 		 const struct v2_state_transition *svm)
 {
-	md->v1_st = st;
 	md->svm = svm;
 
 	/*
@@ -2135,43 +2137,24 @@ void v2_dispatch(struct ike_sa *ike, struct state *st,
 	 * that to the IKE SA and then let it do all the create child
 	 * magic.
 	 */
-	statetime_t start = statetime_start(st);
 	so_serial_t old_st = st->st_serialno;
-	so_serial_t old_md_st = md->v1_st != NULL ? md->v1_st->st_serialno : SOS_NOBODY;
-	struct child_sa *child = IS_CHILD_SA(st) ? pexpect_child_sa(st) : NULL;
-	stf_status e = svm->processor(ike, child, md);
-	statetime_stop(&start, "processing: %s in %s()", svm->story, __func__);
 
-	/*
-	 * Processor may screw around with md->v1_st, for instance
-	 * switching it to the CHILD SA, or a newly created state.
-	 * Hence use that version for now.
-	 */
+	statetime_t start = statetime_start(st);
+	struct child_sa *child = IS_CHILD_SA(st) ? pexpect_child_sa(st) : NULL;
+	/* danger: st may not be valid */
+	stf_status e = svm->processor(ike, child, md);
 
 	if (e == STF_SKIP_COMPLETE_STATE_TRANSITION) {
-		/* MD.ST may have been freed! */
+		/*
+		 * Danger! Processor did something dodgy like free ST!
+		 */
 		dbg("processor '%s' for #%lu suppresed complete st_v2_transition",
 		    svm->story, old_st);
-		return;
-	}
-
-	if (md->v1_st == NULL) {
-		if (old_md_st != SOS_NOBODY) {
-			/* MD.ST may have been freed! */
-			dbg("XXX: processor '%s' for #%lu deleted state MD.ST",
-			    svm->story, old_st);
-			return;
-		}
 	} else {
-		if (md->v1_st->st_serialno != old_st) {
-			/* MD.ST may have been freed! */
-			dbg("XXX: processor '%s' for #%lu switched state to #%lu",
-			    svm->story, old_st, md->v1_st->st_serialno);
-			st = md->v1_st;
-		}
+		complete_v2_state_transition(st, md, e);
 	}
 
-	complete_v2_state_transition(st, md, e);
+	statetime_stop(&start, "processing: %s in %s()", svm->story, __func__);
 	/* our caller with release_any_md(mdp) */
 }
 
@@ -2256,24 +2239,6 @@ void ikev2_log_parentSA(const struct state *st)
 	}
 }
 
-void log_ipsec_sa_established(const char *m, const struct state *st)
-{
-	/* log Child SA Traffic Selector details for admin's pleasure */
-	const struct traffic_selector *a = &st->st_ts_this;
-	const struct traffic_selector *b = &st->st_ts_that;
-	range_buf ba, bb;
-	log_state(RC_LOG, st, "%s [%s:%d-%d %d] -> [%s:%d-%d %d]",
-		  m,
-		  str_range(&a->net, &ba),
-		  a->startport,
-		  a->endport,
-		  a->ipprotoid,
-		  str_range(&b->net, &bb),
-		  b->startport,
-		  b->endport,
-		  b->ipprotoid);
-}
-
 static void ikev2_child_emancipate(struct ike_sa *from, struct child_sa *to,
 				   const struct v2_state_transition *transition)
 {
@@ -2291,6 +2256,11 @@ static void ikev2_child_emancipate(struct ike_sa *from, struct child_sa *to,
 	/* child is now a parent */
 	ikev2_ike_sa_established(pexpect_ike_sa(&to->sa),
 				 transition, transition->next_state);
+}
+
+static void jam_v2_ike_details(struct jambuf *buf, struct state *st)
+{
+	jam_parent_sa_details(buf, st);
 }
 
 static void success_v2_state_transition(struct state *st, struct msg_digest *md,
@@ -2320,6 +2290,9 @@ static void success_v2_state_transition(struct state *st, struct msg_digest *md,
 	v2_msgid_update_sent(ike, st, md, transition->send);
 	v2_msgid_schedule_next_initiator(ike);
 
+	bool established_before = (IS_IKE_SA_ESTABLISHED(st) ||
+				   IS_CHILD_SA_ESTABLISHED(st));
+
 	if (from_state == STATE_V2_REKEY_IKE_R0 ||
 	    from_state == STATE_V2_REKEY_IKE_I1) {
 		ikev2_child_emancipate(ike, pexpect_child_sa(st),
@@ -2330,102 +2303,74 @@ static void success_v2_state_transition(struct state *st, struct msg_digest *md,
 	passert(st->st_state->kind >= STATE_IKEv2_FLOOR);
 	passert(st->st_state->kind <  STATE_IKEv2_ROOF);
 
-	if (transition->flags & SMF2_ESTABLISHED) {
+	bool established_after = (IS_IKE_SA_ESTABLISHED(st) ||
+				  IS_CHILD_SA_ESTABLISHED(st));
+
+	bool just_established = (!established_before && established_after);
+	if (just_established) {
 		/*
-		 * Count successful transition into an established state.
-		 *
-		 * Because IKE SAs and CHILD SAs share some state transitions
-		 * this only works for CHILD SAs.  IKE SAs are accounted for
-		 * separately.
+		 * Count successful transition into an established
+		 * state.
 		 */
 		pstat_sa_established(st);
 	}
 
 	/*
-	 * Tell whack and logs our progress - unless OE or a state
-	 * transition we're not telling anyone about, then be quiet.
+	 * Tell whack and logs our progress.
 	 *
-	 * XXX: This code uses the new state, and not the state
-	 * transition to determine if things established :-(
-	 *
-	 * This should be a bit in the transition!
+	 * If it's OE or a state transition we're not telling anyone
+	 * about, then be quiet.
 	 */
 
 	dbg("announcing the state transition");
 	enum rc_type w;
-	void (*log_details)(struct jambuf *buf, struct state *st);
-	struct state *log_st;
+	void (*jam_details)(struct jambuf *buf, struct state *st);
+	bool suppress_log = ((transition->flags & SMF2_SUPPRESS_SUCCESS_LOG) ||
+			     (c != NULL && (c->policy & POLICY_OPPORTUNISTIC)));
+	const char *sep = " ";
 	if (transition->state == transition->next_state) {
 		/*
 		 * HACK for seemingly going around in circles
 		 */
-		log_details = NULL;
-		log_st = st;
+		jam_details = NULL;
 		w = RC_NEW_V2_STATE + st->st_state->kind;
-	} else if (IS_CHILD_SA_ESTABLISHED(st)) {
-		log_ipsec_sa_established("negotiated connection", st);
-		log_details = lswlog_child_sa_established;
-		log_st = st;
-		/* log our success and trigger detach */
-		w = RC_SUCCESS;
+	} else if (IS_CHILD_SA(st) && just_established) {
+		jam_details = jam_v2_child_details;
+		suppress_log = false;
+		sep = "; ";
+		w = RC_SUCCESS; /* also triggers detach */
+	} else if (IS_IKE_SA(st) && just_established) {
+		/* ike_sa_established() called elsewhere */
+		jam_details = jam_v2_ike_details;
+		w = RC_SUCCESS; /* also triggers detach */
 	} else if (transition->state == STATE_PARENT_I1 &&
-		transition->next_state == STATE_PARENT_I2) {
-		log_details = lswlog_ike_sa_established;
-		log_st = &ike->sa;
-		w = RC_NEW_V2_STATE + st->st_state->kind;
-	} else if (st->st_state->kind == STATE_PARENT_I2) {
-		/*
-		 * Hack around md->v1_st being forced to the CHILD_SA
-		 * with an IKE SA state.
-		 */
-		pexpect(IS_CHILD_SA(st));
-		pexpect(st != &ike->sa);
-		log_details = lswlog_ike_sa_established;
-		log_st = &ike->sa;
+		   transition->next_state == STATE_PARENT_I2) {
+		jam_details = jam_v2_ike_details;
 		w = RC_NEW_V2_STATE + st->st_state->kind;
 	} else if (st->st_state->kind == STATE_PARENT_R1) {
-		log_details = lswlog_ike_sa_established;
-		log_st = st;
+		jam_details = jam_v2_ike_details;
 		w = RC_NEW_V2_STATE + st->st_state->kind;
-	} else if (transition->state == STATE_V2_REKEY_IKE_R0 &&
-		   transition->next_state == STATE_V2_ESTABLISHED_IKE_SA) {
-		pexpect(st->st_sa_role == SA_RESPONDER);
-		pexpect(IS_IKE_SA(st));
-		pexpect(st != &ike->sa);
-		log_details = lswlog_ike_sa_established;
-		log_st = st;
-		/* log our success and trigger detach */
-		w = RC_SUCCESS;
-	} else if (transition->state == STATE_V2_REKEY_IKE_I1 &&
-		   transition->next_state == STATE_V2_ESTABLISHED_IKE_SA) {
-		pexpect(st->st_sa_role == SA_INITIATOR);
-		pexpect(IS_IKE_SA(st));
-		pexpect(st != &ike->sa);
-		log_details = lswlog_ike_sa_established;
-		log_st = st;
-		/* log our success and trigger detach */
-		w = RC_SUCCESS;
 	} else {
-		log_details = NULL;
-		log_st = st;
+		jam_details = NULL;
 		w = RC_NEW_V2_STATE + st->st_state->kind;
 	}
 
-	if ((transition->flags & SMF2_SUPPRESS_SUCCESS_LOG) ||
-	    (c != NULL && (c->policy & POLICY_OPPORTUNISTIC))) {
+        if (suppress_log) {
 		LSWDBGP(DBG_BASE, buf) {
 			jam(buf, "%s", st->st_state->story);
 			/* document SA details for admin's pleasure */
-			if (log_details != NULL) {
-				log_details(buf, st);
+			if (jam_details != NULL) {
+				jam_string(buf, sep);
+				jam_details(buf, st);
 			}
 		}
 	} else {
-		LLOG_JAMBUF(w, log_st->st_logger, buf) {
+		LLOG_JAMBUF(w, st->st_logger, buf) {
 			jam(buf, "%s", st->st_state->story);
 			/* document SA details for admin's pleasure */
-			if (log_details != NULL) {
-				log_details(buf, st);
+			if (jam_details != NULL) {
+				jam_string(buf, sep);
+				jam_details(buf, st);
 			}
 		}
 	}
@@ -2532,7 +2477,7 @@ static void success_v2_state_transition(struct state *st, struct msg_digest *md,
 		bad_case(transition->send);;
 	}
 
-	if (w == RC_SUCCESS) {
+	if (just_established) {
 		release_any_whack(st, HERE, "IKEv2 transitions finished");
 
 		/* XXX should call unpend again on parent SA */
@@ -2722,35 +2667,6 @@ void complete_v2_state_transition(struct state *st,
 	}
 
 	/*
-	 * XXX: If MD and MD.ST are non-NULL, expect MD.ST to point to
-	 * ST.
-	 *
-	 * An exchange initiator doesn't have an MD:
-	 *
-	 * - store the state transition; but that information really
-	 *   belongs in ST
-	 *
-	 * - store the CHILD SA when created midway through a state
-	*   transition (see IKE_AUTH); but that should be either a
-	*   nested or separate transition
-	 *
-	 * - signal that the SA was deleted mid-transition by clearing
-	 *   MD.ST (so presumably it was previously set); but that
-	 *   should be handled by returning an STF_ZOMBIFY and having
-	 *   this code delete the SA.
-	 */
-	if (md != NULL && md->v1_st != NULL && md->v1_st != st) {
-		/* can't happen, must match */
-		pexpect_fail(st->st_logger, HERE,
-			     "MD.ST contains the unknown %s SA #%lu; expecting the %s SA #%lu",
-			     IS_CHILD_SA(md->v1_st) ? "CHILD" : "IKE",
-			     md->v1_st->st_serialno,
-			     IS_CHILD_SA(st) ? "CHILD" : "IKE",
-			     st->st_serialno);
-		return;
-	}
-
-	/*
 	 * Try to get the transition that is being completed ...
 	 *
 	 * For the moment this comes from the (presumably non-NULL)
@@ -2863,9 +2779,9 @@ void complete_v2_state_transition(struct state *st,
 		release_pending_whacks(st, "internal error");
 		break;
 
-	case STF_V2_DELETE_EXCHANGE_INITIATOR_IKE_SA:
+	case STF_V2_DELETE_IKE_AUTH_INITIATOR:
 		/*
-		 * XXX: this is a hack so that IKE SA initiator can
+		 * XXX: this is a hack so that IKE_AUTH initiator can
 		 * both delete the IKE SA and send an IKE SA delete
 		 * notification because the IKE_AUTH response was
 		 * rejected.
@@ -2874,19 +2790,22 @@ void complete_v2_state_transition(struct state *st,
 		 * Initiator processing response, finish current
 		 * exchange ready for delete request.
 		 */
-		dbg("Message ID: forcing a response received update");
+		dbg("Message ID: forcing a response received update (deleting IKE_AUTH initiator)");
+		pexpect(st->st_state->kind == STATE_PARENT_I2);
 		pexpect(v2_msg_role(md) == MESSAGE_RESPONSE);
-		v2_msgid_update_recv(ike, NULL, md);
+		v2_msgid_update_recv(ike, &ike->sa, md);
 		/*
+		 * All done, now delete the IKE family sending out a
+		 * last gasp delete.
+		 *
 		 * XXX: this call will fire and forget.  It should
 		 * call v2_msgid_queue_initiator() with high priority
 		 * so this is performed as a separate transition?
 		 */
-		delete_ike_family(ike, PROBABLY_SEND_DELETE);
+		delete_ike_family(ike, DO_SEND_DELETE);
 		/* get out of here -- everything is invalid */
 		ike = NULL;
 		st = NULL;
-		md->v1_st = NULL;
 		return;
 
 	case STF_FATAL:
@@ -2926,8 +2845,6 @@ void complete_v2_state_transition(struct state *st,
 
 		/* kill all st pointers */
 		st = NULL;
-		if (md != NULL)
-			md->v1_st = NULL;
 		break;
 
 	case STF_FAIL:
@@ -2954,8 +2871,6 @@ void complete_v2_state_transition(struct state *st,
 		/* kill all st pointers */
 		st = NULL;
 		ike = NULL;
-		if (md != NULL)
-			md->v1_st = NULL;
 		break;
 
 	default: /* STF_FAIL+notification */
@@ -2986,7 +2901,7 @@ void complete_v2_state_transition(struct state *st,
 			if (md->hdr.isa_xchg == ISAKMP_v2_IKE_SA_INIT) {
 				delete_state(st);
 				/* kill all st pointers */
-				st = NULL; ike = NULL; md->v1_st = NULL;
+				st = NULL; ike = NULL;
 			} else {
 				dbg("forcing #%lu to a discard event",
 				    st->st_serialno);

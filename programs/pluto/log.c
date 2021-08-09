@@ -158,7 +158,8 @@ static void jambuf_to_whack(struct jambuf *buf, const struct fd *whackfd, enum r
 	if (s < 0) {
 		/* probably the other end hit cntrl-c */
 		JAMBUF(buf) {
-			jam(buf, "whack error: "PRI_ERRNO, pri_errno(-(int)s));
+			jam(buf, "whack error: ");
+			jam_errno(buf, (-(int)s));
 			/* not whack */
 			log_raw(LOG_WARNING, "", buf);
 		}
@@ -190,8 +191,8 @@ bool whack_prompt_for(struct state *st, const char *prompt,
 
 	ssize_t n = fd_read(st->st_logger->object_whackfd, ansbuf, ansbuf_len);
 	if (n < 0) {
-		log_state(RC_LOG_SERIOUS, st, "read(whackfd) failed: "PRI_ERRNO,
-			  pri_errno(-(int)n));
+		llog_errno(RC_LOG_SERIOUS, st->st_logger, (-(int)n),
+			   "read(whackfd) failed"/*: */);
 		return false;
 	}
 
@@ -474,6 +475,21 @@ const struct logger_object_vec logger_connection_vec = {
 	.free_object = false,
 };
 
+size_t jam_state(struct jambuf *buf, const struct state *st)
+{
+	size_t s = 0;
+	/*
+	 * XXX: When delete state() triggers a delete
+	 * connection, this can be NULL.
+	 */
+	if (st->st_connection != NULL) {
+		s += jam_connection(buf, st->st_connection);
+	}
+	/* state number */
+	s += jam(buf, " "PRI_SO, pri_so(st->st_serialno));
+	return s;
+}
+
 static size_t jam_state_prefix(struct jambuf *buf, const void *object)
 {
 	size_t s = 0;
@@ -483,15 +499,7 @@ static size_t jam_state_prefix(struct jambuf *buf, const void *object)
 		s += jam(buf, "EXPECTATION FAILED: %s NULL: ", __func__);
 	} else {
 		const struct state *st = object;
-		/*
-		 * XXX: When delete state() triggers a delete
-		 * connection, this can be NULL.
-		 */
-		if (st->st_connection != NULL) {
-			s += jam_connection(buf, st->st_connection);
-		}
-		/* state number */
-		s += jam(buf, " #%lu", st->st_serialno);
+		s += jam_state(buf, st);
 		/* state name */
 		if (DBGP(DBG_ADD_PREFIX)) {
 			s += jam(buf, " ");

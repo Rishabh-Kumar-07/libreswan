@@ -125,9 +125,10 @@ static diag_t responder_match_initiator_id_counted(struct ike_sa *ike,
 		bool fromcert = peer_id.kind == ID_DER_ASN1_DN;
 
 		if (authby != AUTHBY_NULL) {
-			r = refine_host_connection(
-				md->v1_st, &peer_id, tarzan_id, FALSE /*initiator*/,
-				LEMPTY /* auth_policy */, authby, &fromcert);
+			r = refine_host_connection(&ike->sa, &peer_id, tarzan_id,
+						   false/*initiator*/,
+						   LEMPTY /* auth_policy */,
+						   authby, &fromcert);
 		}
 
 		if (r == NULL) {
@@ -177,7 +178,7 @@ static diag_t responder_match_initiator_id_counted(struct ike_sa *ike,
 						   NULL, &peer_id);
 			}
 
-			update_state_connection(md->v1_st, r);
+			update_state_connection(&ike->sa, r);
 			/* redo from scratch so we read and check CERT payload */
 			dbg("retrying ikev2_decode_peer_id_and_certs() with new conn");
 			return responder_match_initiator_id_counted(ike, peer_id, tarzan_id, md, depth + 1);
@@ -277,13 +278,11 @@ diag_t ikev2_initiator_decode_responder_id(struct ike_sa *ike, struct msg_digest
 		if (d == NULL) {
 			dbg("X509: CERT and ID matches current connection");
 			remote_cert_matches_id = true;
+		} else if (!LIN(POLICY_ALLOW_NO_SAN, c->policy)) {
+			return diag_diag(&d, "X509: authentication failed; ");
 		} else {
 			llog_diag(RC_LOG_SERIOUS, ike->sa.st_logger, &d, "%s", "");
-			if (!LIN(POLICY_ALLOW_NO_SAN, c->policy)) {
-				return diag("X509: connection failed due to unmatched IKE ID in certificate SAN");
-			} else {
-				log_state(RC_LOG, &ike->sa, "X509: connection allows unmatched IKE ID and certificate SAN");
-			}
+			log_state(RC_LOG, &ike->sa, "X509: connection allows unmatched IKE ID and certificate SAN");
 		}
 	}
 
