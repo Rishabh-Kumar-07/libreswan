@@ -107,7 +107,7 @@ void crypt_hash_final_bytes(struct crypt_hash **hashp,
 
 void crypt_mac_load(struct crypt_mac *container, chunk_t packet){
     for(size_t i = 0; i < packet.len; i++){
-        (container->y)[i + container->len] = (packet.ptr)[i];
+        (container->ptr)[i + container->len] = (packet.ptr)[i];
     }
     container->len += packet.len;
 }
