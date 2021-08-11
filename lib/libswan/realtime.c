@@ -21,6 +21,7 @@
 #include "constants.h"	/* for memeq() which is clearly not a constant */
 #include "passert.h"
 #include "jambuf.h"
+#include "lswlog.h"		/* for fatal_errno() */
 
 #include "realtime.h"
 
@@ -29,6 +30,11 @@ const realtime_t realtime_epoch = REALTIME_EPOCH;
 realtime_t realtime(time_t time)
 {
 	return (realtime_t) { { time, 0, }, };
+}
+
+realtime_t realtime_ms(intmax_t milliseconds)
+{
+	return (realtime_t) { .rt = timeval_ms(milliseconds), };
 }
 
 realtime_t realtimesum(realtime_t t, deltatime_t d)
@@ -43,9 +49,10 @@ bool is_realtime_epoch(realtime_t t)
 	return !timerisset(&t.rt);
 }
 
-bool realbefore(realtime_t a, realtime_t b)
+int realtime_sub_sign(realtime_t l, realtime_t r)
 {
-	return timercmp(&a.rt, &b.rt, <);
+	/* sign(l - r) */
+	return timeval_sub_sign(l.rt, r.rt);
 }
 
 deltatime_t realtimediff(realtime_t a, realtime_t b)
@@ -69,9 +76,8 @@ realtime_t realnow(void)
 		 * a logger and/or a way to return the failure to the
 		 * caller.
 		 */
-		int err = errno;
-		PASSERT_FAIL("clock_gettime(%d,...) call in realnow() failed. "PRI_ERRNO,
-			     realtime_clockid(), pri_errno(err));
+		fatal_errno(PLUTO_EXIT_KERNEL_FAIL, &failsafe_logger, errno,
+			    "clock_gettime(%d,...) call in realnow() failed: ", realtime_clockid());
 	}
 	realtime_t t = {
 		.rt = {

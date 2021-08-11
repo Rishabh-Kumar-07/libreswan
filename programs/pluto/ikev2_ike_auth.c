@@ -40,7 +40,9 @@
 #include "connections.h"
 #include "secrets.h"
 #include "ikev2_message.h"
+#ifdef USE_PAM_AUTH
 #include "pam_auth.h"
+#endif
 #include "pluto_x509.h"
 #include "ikev2_ike_auth.h"
 #include "pending.h"
@@ -382,6 +384,13 @@ static stf_status ikev2_in_IKE_SA_INIT_R_or_IKE_INTERMEDIATE_R_out_IKE_AUTH_I_si
 		return STF_INTERNAL_ERROR;
 	}
 
+	if (LIN(POLICY_MOBIKE, ike->sa.st_connection->policy)) {
+		ike->sa.st_ike_sent_v2n_mobike_supported = true;
+		if (!emit_v2N(v2N_MOBIKE_SUPPORTED, &sk.pbs)) {
+			return STF_INTERNAL_ERROR;
+		}
+	}
+
 	/*
 	 * Now that the AUTH payload is done(?), create and emit the
 	 * child using the first pending connection (or the IKE SA's
@@ -428,17 +437,17 @@ static stf_status ikev2_in_IKE_SA_INIT_R_or_IKE_INTERMEDIATE_R_out_IKE_AUTH_I_si
 				  child->sa.st_serialno, pri_connection(cc, &cib));
 		}
 
+		if (!prep_v2_child_for_request(child)) {
+			return STF_INTERNAL_ERROR;
+		}
+
+		/* XXX: look further down you're seeing double */
 		if (need_v2_configuration_payload(child->sa.st_connection,
 						  ike->sa.hidden_variables.st_nat_traversal)) {
 			if (!emit_v2_child_configuration_payload(child, &sk.pbs)) {
 				return STF_INTERNAL_ERROR;
 			}
 		}
-
-		/* code does not support AH+ESP, which not recommended as per RFC 8247 */
-		struct ipsec_proto_info *proto_info = ikev2_child_sa_proto_info(child, cc->policy);
-		proto_info->our_spi = ikev2_child_sa_spi(&cc->spd, cc->policy, child->sa.st_logger);
-		const chunk_t local_spi = THING_AS_CHUNK(proto_info->our_spi);
 
 		/*
 		 * A CHILD_SA established during an AUTH exchange does
@@ -448,45 +457,9 @@ static stf_status ikev2_in_IKE_SA_INIT_R_or_IKE_INTERMEDIATE_R_out_IKE_AUTH_I_si
 		struct ikev2_proposals *child_proposals =
 			get_v2_ike_auth_child_proposals(cc, "IKE SA initiator emitting ESP/AH proposals",
 							child->sa.st_logger);
-		if (!ikev2_emit_sa_proposals(&sk.pbs, child_proposals, &local_spi)) {
+
+		if (!emit_v2_child_request_payloads(child, child_proposals, &sk.pbs)) {
 			return STF_INTERNAL_ERROR;
-		}
-
-		child->sa.st_ts_this = traffic_selector_from_end(&cc->spd.this);
-		child->sa.st_ts_that = traffic_selector_from_end(&cc->spd.that);
-
-		emit_v2TS_payloads(&sk.pbs, child);
-
-		if ((cc->policy & POLICY_TUNNEL) == LEMPTY) {
-			dbg("Initiator child policy is transport mode, sending v2N_USE_TRANSPORT_MODE");
-			/* In v2, for parent, protoid must be 0 and SPI must be empty */
-			if (!emit_v2N(v2N_USE_TRANSPORT_MODE, &sk.pbs)) {
-				return STF_INTERNAL_ERROR;
-			}
-		} else {
-			dbg("Initiator child policy is tunnel mode, NOT sending v2N_USE_TRANSPORT_MODE");
-		}
-
-		/*
-		 * Propose IPCOMP based on policy.
-		 */
-		if (cc->policy & POLICY_COMPRESS) {
-			if (!emit_v2N_ipcomp_supported(child, &sk.pbs)) {
-				return STF_INTERNAL_ERROR;
-			}
-		}
-
-		if (cc->send_no_esp_tfc) {
-			if (!emit_v2N(v2N_ESP_TFC_PADDING_NOT_SUPPORTED, &sk.pbs)) {
-				return STF_INTERNAL_ERROR;
-			}
-		}
-
-		if (LIN(POLICY_MOBIKE, cc->policy)) {
-			ike->sa.st_ike_sent_v2n_mobike_supported = true;
-			if (!emit_v2N(v2N_MOBIKE_SUPPORTED, &sk.pbs)) {
-				return STF_INTERNAL_ERROR;
-			}
 		}
 
 		/* send CP payloads */
@@ -634,14 +607,14 @@ static stf_status process_v2_IKE_AUTH_request_no_skeyseed_continue(struct state 
 	return STF_SKIP_COMPLETE_STATE_TRANSITION;
 }
 
-#ifdef AUTH_HAVE_PAM
+#ifdef USE_PAM_AUTH
 
-static pamauth_callback_t ikev2_pam_continue;	/* type assertion */
+static pam_auth_callback_fn ikev2_pam_continue;	/* type assertion */
 
-static void ikev2_pam_continue(struct state *ike_st,
-			       struct msg_digest *md,
-			       const char *name UNUSED,
-			       bool success)
+static stf_status ikev2_pam_continue(struct state *ike_st,
+				     struct msg_digest *md,
+				     const char *name UNUSED,
+				     bool success)
 {
 	struct ike_sa *ike = pexpect_ike_sa(ike_st);
 	pexpect(ike->sa.st_sa_role == SA_RESPONDER);
@@ -650,54 +623,18 @@ static void ikev2_pam_continue(struct state *ike_st,
 	dbg("%s() for #%lu %s",
 	     __func__, ike->sa.st_serialno, ike->sa.st_state->name);
 
-	stf_status stf;
-	if (success) {
-		stf = process_v2_IKE_AUTH_request_tail(&ike->sa, md, success);
-	} else {
-		/*
-		 * XXX: better would be to record the message and
-		 * return STF_ZOMBIFY.
-		 *
-		 * That way compute_v2_state_transition() could send
-		 * the recorded message and then transition the state
-		 * to ZOMBIE (aka *_DEL*).  There it can linger while
-		 * dealing with any duplicate IKE_AUTH requests.
-		 */
+	if (!success) {
 		record_v2N_response(ike->sa.st_logger, ike, md,
 				    v2N_AUTHENTICATION_FAILED, NULL/*no-data*/,
 				    ENCRYPTED_PAYLOAD);
 		pstat_sa_failed(&ike->sa, REASON_AUTH_FAILED);
-		stf = STF_FATAL; /* STF_ZOMBIFY */
+		return STF_FATAL; /* STF_ZOMBIFY */
 	}
 
-	/* replace (*mdp)->st with st ... */
-	complete_v2_state_transition(md->v1_st, md, stf);
+	return process_v2_IKE_AUTH_request_tail(&ike->sa, md, success);
 }
 
-/*
- * In the middle of IKEv2 AUTH exchange, the AUTH payload is verified succsfully.
- * Now invoke the PAM helper to authorize connection (based on name only, not password)
- * When pam helper is done state will be woken up and continue.
- *
- * This routine "suspends" MD/ST; once PAM finishes it will be
- * unsuspended.
- */
-
-static stf_status ikev2_start_pam_authorize(struct state *st)
-{
-	id_buf thatidb;
-	const char *thatid = str_id(&st->st_connection->spd.that.id, &thatidb);
-	log_state(RC_LOG, st,
-		  "IKEv2: [XAUTH]PAM method requested to authorize '%s'",
-		  thatid);
-	auth_fork_pam_process(st,
-			       thatid, "password",
-			       "IKEv2",
-			       ikev2_pam_continue);
-	return STF_SUSPEND;
-}
-
-#endif /* AUTH_HAVE_PAM */
+#endif /* USE_PAM_AUTH */
 
 static stf_status process_v2_IKE_AUTH_request_continue_tail(struct state *st,
 								   struct msg_digest *md);
@@ -751,7 +688,7 @@ stf_status process_v2_IKE_AUTH_request(struct ike_sa *ike,
 }
 
 static stf_status process_v2_IKE_AUTH_request_post_cert_decode(struct state *st,
-								      struct msg_digest *md);
+							       struct msg_digest *md);
 
 static stf_status process_v2_IKE_AUTH_request_continue_tail(struct state *st,
 								   struct msg_digest *md)
@@ -772,25 +709,28 @@ static stf_status process_v2_IKE_AUTH_request_continue_tail(struct state *st,
 	return process_v2_IKE_AUTH_request_post_cert_decode(st, md);
 }
 
-static stf_status process_v2_IKE_AUTH_request_post_cert_decode(struct state *st,
-								      struct msg_digest *md)
+static stf_status process_v2_IKE_AUTH_request_ipseckey_continue(struct ike_sa *ike,
+								struct msg_digest *md,
+								bool err);
+
+static stf_status process_v2_IKE_AUTH_request_id_tail(struct ike_sa *ike, struct msg_digest *md);
+
+static stf_status process_v2_IKE_AUTH_request_post_cert_decode(struct state *ike_sa,
+							       struct msg_digest *md)
 {
-	struct ike_sa *ike = ike_sa(st, HERE);
-	ikev2_log_parentSA(st);
+	struct ike_sa *ike = pexpect_ike_sa(ike_sa);
+	ikev2_log_parentSA(&ike->sa);
 
 	/* going to switch to child st. before that update parent */
 	if (!LHAS(ike->sa.hidden_variables.st_nat_traversal, NATED_HOST))
 		update_ike_endpoints(ike, md);
 
-	nat_traversal_change_port_lookup(md, st); /* shouldn't this be ike? */
+	nat_traversal_change_port_lookup(md, &ike->sa); /* shouldn't this be ike? */
 
 	diag_t d = ikev2_responder_decode_initiator_id(ike, md);
 	if (d != NULL) {
 		llog_diag(RC_LOG_SERIOUS, ike->sa.st_logger, &d, "%s", "");
-		event_force(EVENT_SA_EXPIRE, st);
 		pstat_sa_failed(&ike->sa, REASON_AUTH_FAILED);
-		/* already logged above! */
-		release_pending_whacks(st, "Authentication failed");
 		record_v2N_response(ike->sa.st_logger, ike, md,
 				    v2N_AUTHENTICATION_FAILED, NULL/*no-data*/,
 				    ENCRYPTED_PAYLOAD);
@@ -799,19 +739,37 @@ static stf_status process_v2_IKE_AUTH_request_post_cert_decode(struct state *st,
 
 	enum ikev2_auth_method atype = md->chain[ISAKMP_NEXT_v2AUTH]->payload.v2auth.isaa_auth_method;
 	if (IS_LIBUNBOUND && id_ipseckey_allowed(ike, atype)) {
-		stf_status ret = idi_ipseckey_fetch(ike);
-		if (ret != STF_OK) {
-			log_state(RC_LOG_SERIOUS, st, "DNS: IPSECKEY not found or usable");
-			return ret;
+		dns_status ret = responder_fetch_idi_ipseckey(ike, process_v2_IKE_AUTH_request_ipseckey_continue);
+		switch (ret) {
+		case DNS_SUSPEND:
+			return STF_SUSPEND;
+		case DNS_FATAL:
+			llog_sa(RC_LOG_SERIOUS, ike, "DNS: IPSECKEY not found or usable");
+			return STF_FATAL;
+		case DNS_OK:
+			break;
 		}
 	}
 
-	return process_v2_IKE_AUTH_request_id_tail(md);
+	return process_v2_IKE_AUTH_request_id_tail(ike, md);
 }
 
-stf_status process_v2_IKE_AUTH_request_id_tail(struct msg_digest *md)
+stf_status process_v2_IKE_AUTH_request_ipseckey_continue(struct ike_sa *ike,
+							 struct msg_digest *md,
+							 bool err)
 {
-	struct ike_sa *ike = pexpect_ike_sa(md->v1_st);
+	if (err) {
+		/* already logged?! */
+		record_v2N_response(ike->sa.st_logger, ike, md,
+				    v2N_AUTHENTICATION_FAILED, NULL/*no-data*/,
+				    ENCRYPTED_PAYLOAD);
+		return STF_FATAL;
+	}
+	return process_v2_IKE_AUTH_request_id_tail(ike, md);
+}
+
+stf_status process_v2_IKE_AUTH_request_id_tail(struct ike_sa *ike, struct msg_digest *md)
+{
 	lset_t policy = ike->sa.st_connection->policy;
 	bool found_ppk = FALSE;
 	chunk_t null_auth = EMPTY_CHUNK;
@@ -978,7 +936,7 @@ stf_status process_v2_IKE_AUTH_request_id_tail(struct msg_digest *md)
 			}
 			dbg("NULL_AUTH verified");
 		} else {
-			dbg("verifying AUTH payload");
+			dbg("responder verifying AUTH payload");
 			diag_t d = v2_authsig_and_log(md->chain[ISAKMP_NEXT_v2AUTH]->payload.v2auth.isaa_auth_method,
 						      ike, &idhash_in, &md->chain[ISAKMP_NEXT_v2AUTH]->pbs,
 						      ike->sa.st_connection->spd.that.authby);
@@ -999,10 +957,27 @@ stf_status process_v2_IKE_AUTH_request_id_tail(struct msg_digest *md)
 
 	free_chunk_content(&null_auth);
 
-#ifdef AUTH_HAVE_PAM
-	if (ike->sa.st_connection->policy & POLICY_IKEV2_PAM_AUTHORIZE)
-		return ikev2_start_pam_authorize(&ike->sa);
+#ifdef USE_PAM_AUTH
+	/*
+	 * The AUTH payload is verified succsfully.  Now invoke the
+	 * PAM helper to authorize connection (based on name only, not
+	 * password) When pam helper is done state will be woken up
+	 * and continue.
+	 */
+	if (ike->sa.st_connection->policy & POLICY_IKEV2_PAM_AUTHORIZE) {
+		id_buf thatidb;
+		const char *thatid = str_id(&ike->sa.st_connection->spd.that.id, &thatidb);
+		llog_sa(RC_LOG, ike,
+			"IKEv2: [XAUTH]PAM method requested to authorize '%s'",
+			thatid);
+		if (!pam_auth_fork_request(&ike->sa, thatid, "password",
+					   "IKEv2", ikev2_pam_continue)) {
+			return STF_FATAL;
+		}
+		return STF_SUSPEND;
+	}
 #endif
+
 	return process_v2_IKE_AUTH_request_tail(&ike->sa, md, TRUE);
 }
 
@@ -1239,16 +1214,6 @@ static stf_status process_v2_IKE_AUTH_request_auth_signature_continue(struct ike
 		ike->sa.st_sent_redirect = true;	/* mark that we have sent REDIRECT in IKE_AUTH */
 	}
 
-	if (LIN(POLICY_TUNNEL, c->policy) == LEMPTY && ike->sa.st_seen_use_transport) {
-		if (!emit_v2N(v2N_USE_TRANSPORT_MODE, &sk.pbs))
-			return STF_INTERNAL_ERROR;
-	}
-
-	if (c->send_no_esp_tfc) {
-		if (!emit_v2N(v2N_ESP_TFC_PADDING_NOT_SUPPORTED, &sk.pbs))
-			return STF_INTERNAL_ERROR;
-	}
-
 	/* send out the IDr payload */
 	{
 		pb_stream r_id_pbs;
@@ -1367,9 +1332,13 @@ static stf_status process_v2_IKE_AUTH_response_post_cert_decode(struct state *ik
 	if (d != NULL) {
 		llog_diag(RC_LOG_SERIOUS, ike->sa.st_logger, &d, "%s", "");
 		pstat_sa_failed(&ike->sa, REASON_AUTH_FAILED);
-		/* already logged above! */
-		release_pending_whacks(&ike->sa, "authentication failed");
-		return STF_V2_DELETE_EXCHANGE_INITIATOR_IKE_SA;
+		/*
+		 * We cannot send a response as we are processing
+		 * IKE_AUTH reply the RFC states we should pretend
+		 * IKE_AUTH was okay, and then send an INFORMATIONAL
+		 * DELETE IKE SA but we have not implemented that yet.
+		 */
+		return STF_V2_DELETE_IKE_AUTH_INITIATOR;
 	}
 
 	struct connection *c = ike->sa.st_connection;
@@ -1421,19 +1390,19 @@ static stf_status process_v2_IKE_AUTH_response_post_cert_decode(struct state *ik
 
 	/* process AUTH payload */
 
-	dbg("verifying AUTH payload");
+	dbg("initiator verifying AUTH payload");
 	d = v2_authsig_and_log(md->chain[ISAKMP_NEXT_v2AUTH]->payload.v2auth.isaa_auth_method,
 			       ike, &idhash_in, &md->chain[ISAKMP_NEXT_v2AUTH]->pbs, that_authby);
 	if (d != NULL) {
 		llog_diag(RC_LOG_SERIOUS, ike->sa.st_logger, &d, "%s", "");
-		dbg("R2 Auth Payload failed");
+		pstat_sa_failed(&ike->sa, REASON_AUTH_FAILED);
 		/*
 		 * We cannot send a response as we are processing
 		 * IKE_AUTH reply the RFC states we should pretend
 		 * IKE_AUTH was okay, and then send an INFORMATIONAL
 		 * DELETE IKE SA but we have not implemented that yet.
 		 */
-		return STF_V2_DELETE_EXCHANGE_INITIATOR_IKE_SA;
+		return STF_V2_DELETE_IKE_AUTH_INITIATOR;
 	}
 
 	/*

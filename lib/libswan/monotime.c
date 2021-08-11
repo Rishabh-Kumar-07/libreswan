@@ -21,13 +21,18 @@
 
 #include "constants.h"	/* for memeq() which is clearly not a constant */
 #include "jambuf.h" 
-#include "passert.h"
+#include "lswlog.h"		/* for fatal_errno() */
 
 #include "monotime.h"
 
 monotime_t monotime(intmax_t seconds)
 {
 	return (monotime_t) { .mt = { .tv_sec = seconds, }, };
+}
+
+monotime_t monotime_ms(intmax_t milliseconds)
+{
+	return (monotime_t) { .mt = timeval_ms(milliseconds), };
 }
 
 const monotime_t monotime_epoch = MONOTIME_EPOCH;
@@ -57,9 +62,8 @@ monotime_t mononow(void)
 		 * a logger and/or a way to return the failure to the
 		 * caller.
 		 */
-		int err = errno;
-		PASSERT_FAIL("clock_gettime(%d,...) in mononow() failed. "PRI_ERRNO,
-			     monotime_clockid(), pri_errno(err));
+		fatal_errno(PLUTO_EXIT_KERNEL_FAIL, &failsafe_logger, errno,
+			    "clock_gettime(%d,...) in mononow() failed: ", monotime_clockid());
 	}
 	/* OK */
 	return (monotime_t) {
@@ -103,9 +107,9 @@ bool monobefore(monotime_t a, monotime_t b)
 	return timercmp(&a.mt, &b.mt, <);
 }
 
-bool monotime_eq(monotime_t a, monotime_t b)
+int monotime_sub_sign(monotime_t l, monotime_t r)
 {
-	return timercmp(&a.mt, &b.mt, ==);
+	return timeval_sub_sign(l.mt, r.mt);
 }
 
 deltatime_t monotimediff(monotime_t a, monotime_t b)

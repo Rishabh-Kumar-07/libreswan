@@ -40,7 +40,6 @@
 
 #include "defs.h"
 #include "proposals.h"
-#include "connection_db.h"		/* for co_serial_t */
 #include "hash_table.h"
 #include "diag.h"
 #include "ckaid.h"
@@ -53,6 +52,58 @@
 #include "reqid.h"
 #include "state.h"
 #include "whack.h"
+
+/*
+ * Per-connection unique ID.
+ */
+
+typedef struct { unsigned long co; } co_serial_t;
+
+#define PRI_CO "$%lu"
+#define pri_co(CO) ((CO).co)
+
+extern const co_serial_t unset_co_serial;
+
+#define co_serial_is_unset(CO) ((CO).co == 0)
+#define co_serial_is_set !co_serial_is_unset
+/* as in co_serial_cmp(L,>=,R); unset never matches */
+#define co_serial_cmp(L, OP, R) ((L).co != 0 && (R).co != 0 && (L).co OP (R).co)
+
+/*
+ * Fast access to a connection.
+ */
+
+enum connection_hash_tables {
+	CONNECTION_SERIALNO_HASH_TABLE,
+	/* add tables here */
+	CONNECTION_HASH_TABLES_ROOF,
+};
+
+struct connection *connection_by_serialno(co_serial_t serialno);
+
+/*
+ * An extract of the original configuration information for
+ * the connection's end sent over by whack.
+ */
+
+enum left_right { LEFT_END, RIGHT_END, };
+
+struct config_end {
+	const char *leftright;
+	enum left_right end_index;
+	struct {
+		ip_subnet subnet;
+		ip_protoport protoport;
+	} client;
+	struct {
+		unsigned ikeport;
+	} host;
+};
+
+struct config {
+	chunk_t sec_label;
+	struct config_end end[2];
+};
 
 /* There are two kinds of connections:
  * - ISAKMP connections, between hosts (for IKE communication)
@@ -162,7 +213,6 @@ const char *str_policy_prio(policy_prio_t pp, policy_prio_buf *buf);
 struct host_pair;	/* opaque type */
 
 struct end {
-	const char *leftright; /* redundant .config->end_name */
 	struct id id;
 
 	enum keyword_host host_type;
@@ -188,6 +238,11 @@ struct end {
 	const struct config_end *config;
 
 	chunk_t sec_label;
+	/*
+	 * True if `sec_label` value is from a connection configuration's
+	 * `policy-label` in ipsec.conf.
+	 */
+	bool has_config_policy_label;
 	bool key_from_DNS_on_demand;
 	bool has_client;
 	bool has_id_wildcards;
@@ -273,7 +328,7 @@ struct ephemeral_variables {
 
 struct connection {
 	co_serial_t serialno;
-	co_serial_t serial_from;
+	co_serial_t serial_from; /* "0" when connection root */
 	char *name;
 	struct logger *logger;
 	enum ike_version ike_version;
@@ -418,24 +473,22 @@ struct connection {
 
 	/*
 	 * An extract of the original configuration information for
-	 * the connection's end sent over by whack.
+	 * the connection's end sent over by whack.  This pointer is
+	 * only valid in the root connection created from a whack
+	 * message.
 	 */
-	struct config_end {
-		const char *end_name;
-		enum left_right { LEFT_END, RIGHT_END, } end_index;
-		struct {
-			ip_subnet subnet;
-			ip_protoport protoport;
-		} client;
-		struct {
-			unsigned ikeport;
-		} host;
-	} config[2];
+	struct config *root_config;
+
 	/*
-	 * Danger: for a connection instance, these point into the
-	 * parent connection.
+	 * Pointers to the connection's original configuration values
+	 * as specified by whack.
+	 *
+	 * For a connection instance, these point into connection the
+	 * template.
 	 */
-	const struct config_end *local, *remote;
+	const struct config *config;
+	const struct config_end *local;
+	const struct config_end *remote;
 };
 
 extern bool same_peer_ids(const struct connection *c,
@@ -515,7 +568,8 @@ struct connection *oppo_instantiate(struct connection *c,
 				    const ip_address *remote_address);
 extern struct connection *instantiate(struct connection *c,
 				      const ip_address *peer_addr,
-				      const struct id *peer_id);
+				      const struct id *peer_id,
+				      shunk_t sec_label);
 
 struct connection *build_outgoing_opportunistic_connection(const ip_endpoint *our_client,
 							   const ip_endpoint *peer_client);

@@ -278,17 +278,23 @@ void libreswan_exit(enum pluto_exit_code rc) NEVER_RETURNS;
 
 /*
  * XXX: The message format is:
- *   ERROR: <log-prefix><message...>
+ *   ERROR: <log-prefix><message...>[. Errno: <errno>: <strerr>"]
  * and not:
- *   <log-prefix>ERROR: <message...>
+ *   <log-prefix>ERROR: <message...>...
  */
-void log_error(struct logger *logger, const char *message, ...) PRINTF_LIKE(2);
+
+void log_error(struct logger *logger, int error,
+	       const char *message, ...) PRINTF_LIKE(3);
+
 #define log_errno(LOGGER, ERRNO, FMT, ...)				\
 	{								\
 		int e_ = ERRNO; /* save value across va args */		\
-		log_error(LOGGER, FMT". "PRI_ERRNO,			\
-			  ##__VA_ARGS__, pri_errno(e_));		\
+		log_error(LOGGER, e_, FMT, ##__VA_ARGS__); \
 	}
+
+/* like log_error() but no ERROR: prefix */
+void llog_errno(lset_t rc_flags, const struct logger *logger, int error,
+		const char *message, ...) PRINTF_LIKE(4);
 
 /*
  * XXX: The message format is:
@@ -296,14 +302,10 @@ void log_error(struct logger *logger, const char *message, ...) PRINTF_LIKE(2);
  * and not:
  *   <log-prefix>FATAL ERROR: <message...>
  */
-void fatal(enum pluto_exit_code rc, struct logger *logger,
+void fatal(enum pluto_exit_code rc, const struct logger *logger,
 	   const char *message, ...) PRINTF_LIKE(3) NEVER_RETURNS;
-#define fatal_errno(RC, LOGGER, ERRNO, FMT, ...)			\
-	{								\
-		int e_ = ERRNO; /* save value across va args */		\
-		fatal(RC, LOGGER, FMT". "PRI_ERRNO,			\
-		      ##__VA_ARGS__, pri_errno(e_));			\
-	}
+void fatal_errno(enum pluto_exit_code rc, const struct logger *logger,
+		 int error, const char *message, ...) PRINTF_LIKE(4) NEVER_RETURNS;
 
 /*
  * Log debug messages to the main log stream, but not the WHACK log
@@ -339,6 +341,7 @@ extern lset_t cur_debugging;	/* current debugging level */
 
 /* DBG_*() are unconditional */
 void DBG_log(const char *message, ...) PRINTF_LIKE(1);
+void DBG_va_list(const char *message, va_list ap) PRINTF_LIKE_VA(1);
 void DBG_dump(const char *label, const void *p, size_t len);
 #define DBG_dump_hunk(LABEL, HUNK)				\
 	{							\

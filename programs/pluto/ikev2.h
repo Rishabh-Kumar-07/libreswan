@@ -34,8 +34,6 @@ typedef stf_status ikev2_state_transition_fn(struct ike_sa *ike,
 					     struct child_sa *child, /* could be NULL */
 					     struct msg_digest *md /* could be NULL */);
 
-extern void log_ipsec_sa_established(const char *m, const struct state *st);
-
 extern void complete_v2_state_transition(struct state *st,
 					 struct msg_digest *mdp,
 					 stf_status result);
@@ -78,11 +76,11 @@ struct ikev2_proposals *get_v2_create_child_proposals(struct connection *c, cons
 
 bool ikev2_emit_sa_proposal(struct pbs_out *pbs,
 			    const struct ikev2_proposal *proposal,
-			    const chunk_t *local_spi);
+			    shunk_t local_spi);
 
 bool ikev2_emit_sa_proposals(struct pbs_out *outs,
 			     const struct ikev2_proposals *proposals,
-			     const chunk_t *local_spi);
+			     const shunk_t local_spi);
 
 const struct dh_desc *ikev2_proposals_first_dh(const struct ikev2_proposals *proposals,
 					       struct logger *logger);
@@ -106,11 +104,6 @@ bool ikev2_proposal_to_proto_info(const struct ikev2_proposal *proposal,
 
 bool ikev2_proposal_to_trans_attrs(const struct ikev2_proposal *chosen,
 				   struct trans_attrs *ta_out, struct logger *logger);
-
-struct ipsec_proto_info *ikev2_child_sa_proto_info(struct child_sa *child, lset_t policy);
-
-ipsec_spi_t ikev2_child_sa_spi(const struct spd_route *spd_route, lset_t policy,
-			       struct logger *logger);
 
 extern void ikev2_log_parentSA(const struct state *st);
 
@@ -206,7 +199,7 @@ void ikev2_ike_sa_established(struct ike_sa *ike,
 			      const struct v2_state_transition *svm,
 			      enum state_kind new_state);
 
-extern bool emit_v2KE(chunk_t *g, const struct dh_desc *group, pb_stream *outs);
+extern bool emit_v2KE(chunk_t g, const struct dh_desc *group, pb_stream *outs);
 
 extern void init_ikev2(void);
 

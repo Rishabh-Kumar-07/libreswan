@@ -410,7 +410,7 @@ static bool try_all_keys(const char *cert_origin,
 		 * loop will be deleted.
 		 */
 		if (!is_realtime_epoch(key->until_time) &&
-		    realbefore(key->until_time, s->now)) {
+		    realtime_cmp(key->until_time, <, s->now)) {
 			id_buf printkid;
 			realtime_buf buf;
 			dbg("  skipping '%s' which expired on %s",
@@ -502,7 +502,7 @@ diag_t authsig_and_log_using_pubkey(struct ike_sa *ike,
 	for (struct pubkey_list **pp = &pluto_pubkeys; *pp != NULL; ) {
 		struct pubkey *key = (*pp)->key;
 		if (!is_realtime_epoch(key->until_time) &&
-		    realbefore(key->until_time, s.now)) {
+		    realtime_cmp(key->until_time, <, s.now)) {
 			id_buf printkid;
 			log_state(RC_LOG_SERIOUS, &ike->sa,
 				  "cached %s public key '%s' has expired and has been deleted",
@@ -543,6 +543,9 @@ diag_t authsig_and_log_using_pubkey(struct ike_sa *ike,
 	pexpect(s.key != NULL);
 	pexpect(s.tried_cnt > 0);
 	LLOG_JAMBUF(RC_LOG_SERIOUS, ike->sa.st_logger, buf) {
+		if (ike->sa.st_ike_version == IKEv2) {
+			jam(buf, "established IKE SA; ");
+		}
 		jam(buf, "authenticated using %s with %s and %s certificate ",
 		    type->name, hash_algo->common.fqn,
 		    s.cert_origin);
@@ -747,7 +750,7 @@ const struct private_key_stuff *get_connection_private_key(const struct connecti
 			 */
 			llog(RC_LOG|LOG_STREAM/*not-whack-grrr*/, logger,
 				    "reloaded private key matching %s certificate '%s'",
-				    c->spd.this.leftright, nickname);
+				    c->spd.this.config->leftright, nickname);
 		}
 
 		/*
@@ -792,7 +795,7 @@ const struct private_key_stuff *get_connection_private_key(const struct connecti
 			ckaid_buf ckb;
 			llog(RC_LOG|LOG_STREAM/*not-whack-grr*/, logger,
 				    "reloaded private key matching %s CKAID %s",
-				    c->spd.this.leftright, str_ckaid(c->spd.this.ckaid, &ckb));
+				    c->spd.this.config->leftright, str_ckaid(c->spd.this.ckaid, &ckb));
 		}
 
 

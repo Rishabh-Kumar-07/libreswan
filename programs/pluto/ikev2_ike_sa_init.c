@@ -568,12 +568,13 @@ void ikev2_out_IKE_SA_INIT_I(struct connection *c,
 		   c->kind == CK_TEMPLATE) {
 		/* Toss the acquire onto the pending queue */
 		ip_address remote_address = endpoint_address(ike->sa.st_remote_endpoint);
-		struct connection *d = instantiate(c, &remote_address, NULL);
-		/* replace connection template label with ACQUIREd label */
-		free_chunk_content(&d->spd.this.sec_label);
-		d->spd.this.sec_label = clone_hunk(sec_label, "ACQUIRED sec_label");
-		free_chunk_content(&d->spd.that.sec_label);
-		d->spd.that.sec_label = clone_hunk(sec_label, "ACQUIRED sec_label");
+		struct connection *d = instantiate(c, &remote_address, NULL, sec_label);
+		/*
+		 * Since the newly instantiated connection has a security label
+		 * due to a Netlink `ACQUIRE` message from the kernel, it is
+		 * not a template connection.
+		 */
+		d->kind = CK_INSTANCE;
 		add_pending(background ? null_fd : ike->sa.st_logger->global_whackfd, ike, d, policy, 1,
 			    /*predecessor*/SOS_NOBODY,
 			    sec_label, true /*part of initiate*/);
@@ -627,8 +628,14 @@ void ikev2_out_IKE_SA_INIT_I(struct connection *c,
 	}
 
 	if (IS_LIBUNBOUND && id_ipseckey_allowed(ike, IKEv2_AUTH_RESERVED)) {
-		stf_status ret = idr_ipseckey_fetch(ike);
-		if (ret != STF_OK) {
+		/*
+		 * This runs in the background?  How is it ever
+		 * synced?
+		 */
+		if (!initiator_fetch_idr_ipseckey(ike)) {
+			llog_sa(RC_LOG_SERIOUS, ike,
+				"fetching IDr IPsec key using DNS failed");
+			delete_state(&ike->sa);
 			return;
 		}
 	}
@@ -714,7 +721,7 @@ bool record_v2_IKE_SA_INIT_request(struct ike_sa *ike)
 	struct ikev2_proposals *ike_proposals =
 		get_v2_ike_proposals(c, "IKE SA initiator emitting local proposals", ike->sa.st_logger);
 	if (!ikev2_emit_sa_proposals(&rbody, ike_proposals,
-				     (chunk_t*)NULL /* IKE - no CHILD SPI */)) {
+				     null_shunk /* IKE - no CHILD SPI */)) {
 		return false;
 	}
 
@@ -724,7 +731,7 @@ bool record_v2_IKE_SA_INIT_request(struct ike_sa *ike)
 	 */
 
 	/* send KE */
-	if (!emit_v2KE(&ike->sa.st_gi, ike->sa.st_oakley.ta_dh, &rbody))
+	if (!emit_v2KE(ike->sa.st_gi, ike->sa.st_oakley.ta_dh, &rbody))
 		return false;
 
 	/* send NONCE */
@@ -1022,7 +1029,8 @@ static stf_status process_v2_IKE_SA_INIT_request_continue(struct state *ike_st,
 		 * part of the proposal.  Hence the NULL SPI.
 		 */
 		passert(ike->sa.st_accepted_ike_proposal != NULL);
-		if (!ikev2_emit_sa_proposal(&rbody, ike->sa.st_accepted_ike_proposal, NULL)) {
+		if (!ikev2_emit_sa_proposal(&rbody, ike->sa.st_accepted_ike_proposal,
+					    null_shunk/*IKE has no SPI*/)) {
 			dbg("problem emitting accepted proposal");
 			return STF_INTERNAL_ERROR;
 		}
@@ -1056,7 +1064,7 @@ static stf_status process_v2_IKE_SA_INIT_request_continue(struct state *ike_st,
 	 */
 	pexpect(ike->sa.st_oakley.ta_dh == dh_local_secret_desc(local_secret));
 	unpack_KE_from_helper(&ike->sa, local_secret, &ike->sa.st_gr);
-	if (!emit_v2KE(&ike->sa.st_gr, dh_local_secret_desc(local_secret), &rbody)) {
+	if (!emit_v2KE(ike->sa.st_gr, dh_local_secret_desc(local_secret), &rbody)) {
 		return STF_INTERNAL_ERROR;
 	}
 
@@ -1327,8 +1335,10 @@ stf_status process_v2_IKE_SA_INIT_response(struct ike_sa *ike,
 		 * XXX: Initiator - so this code will not trigger a
 		 * notify.  Since packet isn't trusted, should it be
 		 * ignored?
+		 *
+		 * STF_FATAL will send the code down the retry path.
 		 */
-		return STF_FAIL + v2N_INVALID_SYNTAX;
+		return STF_FATAL;
 	}
 
 	/* Ni in */
@@ -1337,6 +1347,8 @@ stf_status process_v2_IKE_SA_INIT_response(struct ike_sa *ike,
 		 * Presumably not our fault.  Syntax errors in a
 		 * response kill the family (and trigger no further
 		 * exchange).
+		 *
+		 * STF_FATAL will send the code down the retry path.
 		 */
 		return STF_FATAL;
 	}
