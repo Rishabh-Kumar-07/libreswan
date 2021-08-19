@@ -1658,7 +1658,9 @@ enum pubkey_alg {
 	PUBKEY_ALG_DSA = 1,
 	PUBKEY_ALG_RSA = 2,
 	PUBKEY_ALG_ECDSA = 3,
+##ifdef NSS_EDDSA
 	PUBKEY_ALG_EDDSA = 4,
+#endif
 };
 
 /*
@@ -1866,7 +1868,10 @@ enum ikev2_hash_algorithm {
 	IKEv2_HASH_ALGORITHM_SHA2_256 = 2,
 	IKEv2_HASH_ALGORITHM_SHA2_384 = 3,
 	IKEv2_HASH_ALGORITHM_SHA2_512 = 4,
+
+#ifdef NSS_EDDSA
 	IKEv2_HASH_ALGORITHM_IDENTITY = 5, /* RFC 4307-bis */
+#endif
 	/* 6-1023 Unassigned */
 	/* 1024-65535 Reserved for private use */
 	IKEv2_HASH_ALGORITHM_ROOF
