@@ -3282,7 +3282,7 @@ struct connection *refine_host_connection(const struct state *st,
 			}
 			break;
 		}
-#if 0
+
 		case AUTHBY_ECDSA:
 		{
 			/*
