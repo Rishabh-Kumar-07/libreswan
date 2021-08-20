@@ -731,10 +731,10 @@ ifeq ($(USE_NSS_KDF),true)
 USERLAND_CFLAGS += -DUSE_NSS_KDF
 endif
 
-NSS_EDDSA ?= true
-ifeq ($(NSS_EDDSA),true)
-USERLAND_CFLAGS += -NSS_EDDSA
-endif
+#NSS_EDDSA ?= true
+#ifeq ($(NSS_EDDSA),true)
+#USERLAND_CFLAGS += -NSS_EDDSA
+#endif
 
 
 USERLAND_CFLAGS += -DDEFAULT_RUNDIR=\"$(FINALRUNDIR)\"
