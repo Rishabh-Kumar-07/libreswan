@@ -3283,6 +3283,7 @@ struct connection *refine_host_connection(const struct state *st,
 			break;
 		}
 
+#if 0
 		case AUTHBY_ECDSA:
 		{
 			/*
@@ -3315,6 +3316,7 @@ struct connection *refine_host_connection(const struct state *st,
 			break;
 		}
 
+#endif
 #endif
 		default:
 			/* don't die on bad_case(auth); */
