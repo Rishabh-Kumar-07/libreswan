@@ -554,7 +554,7 @@ diag_t v2_authsig_and_log(enum ikev2_auth_method recv_auth,
 
 #ifdef NSS_EDDSA
 		case AUTHBY_EDDSA:
-			d = v2_authsig_and_log_using_ECDSA_pubkey(ike, idhash_in, signature, hap->algo);
+			d = v2_authsig_and_log_using_EDDSA_pubkey(ike, idhash_in, signature, hap->algo);
 			break;
 #endif
 
