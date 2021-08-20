@@ -105,7 +105,7 @@ void crypt_hash_final_bytes(struct crypt_hash **hashp,
 	*hashp = hash = NULL;
 }
 
-##ifdef NSS_EDDSA
+#ifdef NSS_EDDSA
 void crypt_mac_load(struct crypt_mac *container, chunk_t packet){
     for(size_t i = 0; i < packet.len; i++){
         (container->ptr)[i + container->len] = (packet.ptr)[i];
