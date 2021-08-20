@@ -490,7 +490,7 @@ struct hash_desc {
 	shunk_t hash_asn1_blob_rsa;
 	shunk_t hash_asn1_blob_ecdsa;
 
-##ifdef NSS_EDDSA
+#ifdef NSS_EDDSA
 	shunk_t hash_asn1_blob_eddsa;
 #endif
 	const struct hash_ops *hash_ops;
