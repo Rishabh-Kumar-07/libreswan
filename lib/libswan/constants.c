@@ -714,7 +714,9 @@ static const char *const ikev2_hash_algorithm_name[] = {
 	"IKEv2_HASH_ALGORITHM_SHA2_256",
 	"IKEv2_HASH_ALGORITHM_SHA2_384",
 	"IKEv2_HASH_ALGORITHM_SHA2_512",
+#ifdef NSS_EDDSA
 	"IKEv2_HASH_ALGORITHM_IDENTITY"
+#endif
 	/* 6-1023 Unassigned */
 };
 
