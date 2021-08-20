@@ -112,7 +112,7 @@ void crypt_mac_load(struct crypt_mac *container, chunk_t packet){
     }
     container->len += packet.len;
 }
-##endif
+#endif
 
 
 struct crypt_mac crypt_hash_final_mac(struct crypt_hash **hashp)
