@@ -720,7 +720,9 @@ static const char *const ikev2_hash_algorithm_name[] = {
 
 enum_names ikev2_hash_algorithm_names = {
 	IKEv2_HASH_ALGORITHM_RESERVED,
+#ifdef NSS_EDDSA
 	IKEv2_HASH_ALGORITHM_IDENTITY,
+#endif
 	ARRAY_REF(ikev2_hash_algorithm_name),
 	"IKEv2_HASH_ALGORITHM_", /* prefix */
 	NULL
