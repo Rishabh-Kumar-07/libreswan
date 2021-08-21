@@ -56,7 +56,7 @@
 
 static authsig_using_pubkey_fn authsig_using_ECDSA_ikev2_pubkey; /* type assert */
 
-bool authsig_using_ECDSA_ikev2_pubkey(const struct crypt_mac *hash, shunk_t signature,
+bool authsig_using_ECDSA_ikev2_pubkey(const struct crypt_mac *hash, const struct crypt_mac_d *dhash = NULL, shunk_t signature,
 				      struct pubkey *kr,
 				      const struct hash_desc *unused_hash_algo UNUSED,
 				      diag_t *fatal_diag,

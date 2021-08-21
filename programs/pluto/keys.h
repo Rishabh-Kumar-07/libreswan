@@ -77,7 +77,7 @@ const struct pubkey *find_pubkey_by_ckaid(const char *ckaid);
  * FATAL_DIAG != NULL => operation should be aborted (implies false)
  */
 
-typedef bool (authsig_using_pubkey_fn) (const struct crypt_mac *hash,
+typedef bool (authsig_using_pubkey_fn) (const struct crypt_mac *hash, const struct crypt_mac_d *dhash = NULL,
 					shunk_t signature,
 					struct pubkey *kr,
 					const struct hash_desc *hash_algo,
@@ -86,7 +86,7 @@ typedef bool (authsig_using_pubkey_fn) (const struct crypt_mac *hash,
 
 extern authsig_using_pubkey_fn authsig_using_RSA_pubkey;
 
-extern diag_t authsig_and_log_using_pubkey(struct ike_sa *ike,
+extern diag_t authsig_and_log_using_pubkey(struct ike_sa *ike, const struct crypt_mac_d *dhash = NULL,
 					   const struct crypt_mac *hash,
 					   shunk_t signature,
 					   const struct hash_desc *hash_algo,

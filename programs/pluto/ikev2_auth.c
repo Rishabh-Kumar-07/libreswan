@@ -410,6 +410,97 @@ static bool ikev2_try_asn1_hash_blob(const struct hash_desc *hash_algo,
 		pexpect(b.len <= sizeof(in_blob)) && /* enough space in in_blob[] */
 		pexpect(pbs_in_raw(a_pbs, in_blob, b.len, "ASN.1 blob for hash algo") == NULL); /* can eat octets */
 }
+#ifdef NSS_EDDSA
+struct crypt_mac_d v2_eddsa_calculate_sighash(const struct ike_sa *ike,
+				      const struct crypt_mac *idhash,
+				      const struct hash_desc *hasher,
+				      enum perspective from_the_perspective_of)
+{
+	enum sa_role role;
+	chunk_t firstpacket;
+	/*
+	 * NOTE: intermediate_auth is only initialized to quiet GCC.
+	 * It doesn't understand that all uses and references are
+	 * guarded identically, with ike->sa.st_intermediate_used.
+	 * Using a local copy ike->sa.st_intermediate_used doesn't help.
+	 * DHR 2020 Sept 12; GCC 10.2.1
+	 */
+	chunk_t ia1 = NULL_HUNK;
+	chunk_t ia2 = NULL_HUNK;
+	switch (from_the_perspective_of) {
+	case LOCAL_PERSPECTIVE:
+		firstpacket = ike->sa.st_firstpacket_me;
+		role = ike->sa.st_sa_role;
+		if (ike->sa.st_v2_ike_intermediate_used) {
+			ia1 = ike->sa.st_intermediate_packet_me;
+			ia2 = ike->sa.st_intermediate_packet_peer;
+		}
+		break;
+	case REMOTE_PERSPECTIVE:
+		firstpacket = ike->sa.st_firstpacket_peer;
+		role = (ike->sa.st_sa_role == SA_INITIATOR ? SA_RESPONDER :
+			ike->sa.st_sa_role == SA_RESPONDER ? SA_INITIATOR :
+			0);
+		if (ike->sa.st_v2_ike_intermediate_used) {
+			ia1 = ike->sa.st_intermediate_packet_peer;
+			ia2 = ike->sa.st_intermediate_packet_me;
+		}
+		break;
+	default:
+		bad_case(from_the_perspective_of);
+	}
+
+	const chunk_t *nonce;
+	const char *nonce_name;
+	switch (role) {
+	case SA_INITIATOR:
+		/* on initiator, we need to hash responders nonce */
+		nonce = &ike->sa.st_nr;
+		nonce_name = "inputs to hash2 (responder nonce)";
+		break;
+	case SA_RESPONDER:
+		/* on responder, we need to hash initiators nonce */
+		nonce = &ike->sa.st_ni;
+		nonce_name = "inputs to hash2 (initiator nonce)";
+		break;
+	default:
+		bad_case(from_the_perspective_of);
+	}
+
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump_hunk("inputs to hash1 (first packet)", firstpacket);
+		DBG_dump_hunk(nonce_name, *nonce);
+		DBG_dump_hunk("idhash", *idhash);
+		if (ike->sa.st_v2_ike_intermediate_used) {
+			DBG_dump_hunk("IntAuth_*_I_A", ia1);
+			DBG_dump_hunk("IntAuth_*_R_A", ia2);
+		}
+	}
+
+
+    struct crypt_mac_d calc_hash;
+    calc_hash.len = 0;
+    if(streq(hasher->common.fqn, "IDENTITY_HASH")){
+	    int size_hash = firstpacket.len + (*nonce).len;
+	    if (ike->sa.st_v2_ike_intermediate_used) {
+	        size_hash += (ia1.len + ia2.len);
+	    }
+	    calc_hash.ptr = new uint8_t[size_hash];
+	    memset(calc_hash.ptr, 0, size_hash);
+	    crypt_mac_load(calc_hash.ptr, firstpacket, calc_hash.len);
+	    calc_hash.len += firstpacket.len;
+	    crypt_mac_load(calc_hash.ptr, *nonce, calc_hash.len);
+	    calc_hash.len += (*nonce).len;
+	    if (ike->sa.st_v2_ike_intermediate_used) {
+	        crypt_mac_load(calc_hash.ptr, ia1, calc_hash.len);
+	        calc_hash.len += ia1.len;
+	        crypt_mac_load(&calc_hash, ia2);
+	        calc_hash.len += ia2.len;
+	    }
+	}
+	return calc_hash
+}
+#endif
 
 /*
  * Called by process_v2_IKE_AUTH_request_tail() and

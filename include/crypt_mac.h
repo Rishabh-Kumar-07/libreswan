@@ -39,6 +39,13 @@ struct crypt_mac {
 	uint8_t ptr[64/*see ike_alg_init() for size check*/];
 };
 
+struct crypt_mac_d {
+	/* size of the mac in bytes */
+	size_t len;
+	/* XXX: see note above about why this is called .ptr */
+	uint8_t *ptr;
+};
+
 extern const struct crypt_mac empty_mac;
 
 #endif

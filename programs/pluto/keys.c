@@ -148,7 +148,7 @@ void list_psks(struct show *s)
 	lsw_foreach_secret(pluto_secrets, print_secrets, s);
 }
 
-bool authsig_using_RSA_pubkey(const struct crypt_mac *expected_hash,
+bool authsig_using_RSA_pubkey(const struct crypt_mac *expected_hash, const struct crypt_mac_d *dhash = NULL,
 			      shunk_t signature,
 			      struct pubkey *kr,
 			      const struct hash_desc *hash_algo,
@@ -331,6 +331,7 @@ bool authsig_using_RSA_pubkey(const struct crypt_mac *expected_hash,
 struct tac_state {
 	const struct pubkey_type *type;
 	const struct crypt_mac *hash;
+	const struct crypt_mac_d *dhash = NULL;
 	shunk_t signature;
 	const struct hash_desc *hash_algo;
 	authsig_using_pubkey_fn *try_pubkey;
@@ -434,7 +435,7 @@ static bool try_all_keys(const char *cert_origin,
 		jam(&s->tried_jambuf, " *%s", keyid_str);
 
 		logtime_t try_time = logtime_start(s->logger);
-		bool passed = (s->try_pubkey)(s->hash, s->signature,
+		bool passed = (s->try_pubkey)(s->hash, s->dhash, s->signature,
 						 key, s->hash_algo,
 						 &s->fatal_diag, s->logger);
 		logtime_stop(&try_time, "%s() trying a pubkey", __func__);
@@ -461,7 +462,7 @@ static bool try_all_keys(const char *cert_origin,
 	return false; /* keep searching */
 }
 
-diag_t authsig_and_log_using_pubkey(struct ike_sa *ike,
+diag_t authsig_and_log_using_pubkey(struct ike_sa *ike, const struct crypt_mac_d *dhash = NULL,
 				    const struct crypt_mac *hash,
 				    shunk_t signature,
 				    const struct hash_desc *hash_algo,
@@ -473,6 +474,7 @@ diag_t authsig_and_log_using_pubkey(struct ike_sa *ike,
 		/* in */
 		.type = type,
 		.logger = ike->sa.st_logger,
+		.dhash = dhash;
 		.hash = hash,
 		.now = realnow(),
 		.signature = signature,

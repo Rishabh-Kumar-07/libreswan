@@ -36,6 +36,13 @@ struct crypt_mac v2_calculate_sighash(const struct ike_sa *ike,
 				      const struct hash_desc *hasher,
 				      enum perspective from_the_perspective_of);
 
+#ifdef NSS_EDDSA
+struct crypt_mac_d v2_eddsa_calculate_sighash(const struct ike_sa *ike,
+				      const struct crypt_mac *idhash,
+				      const struct hash_desc *hasher,
+				      enum perspective from_the_perspective_of);
+#endif
+
 enum keyword_authby v2_auth_by(struct ike_sa *ike);
 enum ikev2_auth_method v2_auth_method(struct ike_sa *ike, enum keyword_authby authby);
 const struct hash_desc *v2_auth_negotiated_signature_hash(struct ike_sa *ike);
