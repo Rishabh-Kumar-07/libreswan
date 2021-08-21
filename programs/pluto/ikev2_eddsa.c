@@ -56,7 +56,7 @@
 
 static authsig_using_pubkey_fn authsig_using_EDDSA_ikev2_pubkey; /* type assert */
 
-bool authsig_using_EDDSA_ikev2_pubkey(const struct crypt_mac *hash, shunk_t signature,
+bool authsig_using_EDDSA_ikev2_pubkey(const struct crypt_mac *hash, const struct crypt_mac_d *dhash, shunk_t signature,
 				      struct pubkey *kr,
 				      const struct hash_desc *unused_hash_algo UNUSED,
 				      diag_t *fatal_diag,
@@ -176,9 +176,9 @@ diag_t v2_authsig_and_log_using_EDDSA_pubkey(struct ike_sa *ike,
 		return diag("authentication failed: unknown or unsupported hash algorithm");
 	}
 
-	struct crypt_mac calc_hash = v2_calculate_sighash(ike, idhash, hash_algo,
+	struct crypt_mac_d calc_hash = v2_eddsa_calculate_sighash(ike, idhash, hash_algo,
 							  REMOTE_PERSPECTIVE);
-	diag_t d = authsig_and_log_using_pubkey(ike, &calc_hash, signature, hash_algo,
+	diag_t d = authsig_and_log_using_pubkey(ike, &calc_hash, NULL, signature, hash_algo,
 						&pubkey_type_eddsa,
 						authsig_using_EDDSA_ikev2_pubkey);
 	statetime_stop(&start, "%s()", __func__);
